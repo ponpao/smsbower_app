@@ -1,0 +1,9 @@
+{
+  "version": "1.0.2",
+  "release_date": "2026-06-26",
+  "download_url": "https://github.com/your_username/your_repository/releases/download/v1.0.2/smsbower_app.py",
+  "changelog": [
+    "Added Gold price filtering functionality.",
+    "Added In-App GitHub auto-update system."
+  ]
+}
