@@ -1,7 +1,7 @@
 {
-  "version": "1.0.4",
-  "release_date": "2026-06-26",
-  "download_url": "https://github.com/ponpao/smsbower_app/releases/download/V1.0.4/TRAVKOD.CODEs.1.0.4.exe",
+  "version": "1.0.5",
+  "release_date": "2026-06-27",
+  "download_url": "https://github.com/ponpao/smsbower_app/releases/download/V1.0.5/TRAVKOD.CODEs.1.0.5.exe",
   "changelog": [
     "Added licensing key lock system on Windows.",
     "Added dynamic auto-update configurations.",
