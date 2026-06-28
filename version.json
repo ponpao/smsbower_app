@@ -3,8 +3,7 @@
   "release_date": "2026-06-28",
   "download_url": "https://github.com/ponpao/smsbower_app/releases/download/V2.0.0/TRAVKOD.CODEs.2.0.0.exe",
   "changelog": [
-    "Added licensing key lock system on Windows.",
-    "Added dynamic auto-update configurations.",
-    "Bug fixes and performance improvements."
+    "Added Dark Mode Button",
+    "Improve UI"
   ]
 }
