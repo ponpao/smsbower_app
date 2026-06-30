@@ -1,12 +1,8 @@
 {
-  "version": "3.0.0",
-  "release_date": "2026-06-29",
-  "download_url": "https://github.com/ponpao/smsbower_app/releases/download/V3.0.0/TRAVKOD.CODEs.exe",
+  "version": "3.0.1",
+  "release_date": "2026-06-30",
+  "download_url": "https://github.com/ponpao/smsbower_app/releases/download/V3.0.0/TRAVKOD.CODEs.3.0.1.exe",
   "changelog": [
-    "ថែម UI ថ្មី",
-    "ថែមមុខងារ Download Video",
-    "ថែមមុខងារ Download Video",
-    "ថែមមុខងារកែពត៌មានរូប (EXIF)",
-    "ប្តូរឡូហ្គោapp ថ្មី"
+    "ថែមមុខងារបញ្ចូលលុយពិតៗ (Top-Up) ជាមួយការផ្ទៀងផ្ទាត់សមតុល្យស្វ័យប្រវត្តិ"
   ]
 }
