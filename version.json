@@ -1,8 +1,8 @@
 {
-  "version": "3.0.1",
-  "release_date": "2026-06-30",
-  "download_url": "https://github.com/ponpao/smsbower_app/releases/download/V3.0.0/TRAVKOD.CODEs.3.0.1.exe",
+  "version": "3.1.0",
+  "release_date": "2026-07-01",
+  "download_url": "https://github.com/ponpao/smsbower_app/releases/download/V3.1.0/TRAVKOD.CODEs.3.1.0.exe",
   "changelog": [
-    "ថែមមុខងារបញ្ចូលលុយពិតៗ (Top-Up) ជាមួយការផ្ទៀងផ្ទាត់សមតុល្យស្វ័យប្រវត្តិ"
+    "ថែមមុខងារ Visualizer ថ្មី (Tab 4 ក្បែរ AI Song) — ទម្លាក់រូបភាព + ចម្រៀង ដើម្បីបង្កើតវីដេអូ Music Visualizer ទំនើប (Neon Bars, Circular Spectrum, Waveform)"
   ]
 }
