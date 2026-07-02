@@ -6,6 +6,10 @@ music-visualizer **MP4** — ready for YouTube, TikTok or Reels.
 
 ## Features
 
+- 📱 **Compact modern UI** (450×840, like a phone app): live video preview
+  on top, then tidy tab pages — 📁 Files / 🎨 Style / 🏷 Title / 💬 Subs /
+  ✨ More — with a fixed ⚡ Create Video bar at the bottom
+
 - 🖱️ **Drag & drop** zones for image and audio (click-to-browse also works)
 - ▶️ **Live preview player** right in the app — play/pause, seek bar, with
   sound (pygame); every setting updates the preview instantly
