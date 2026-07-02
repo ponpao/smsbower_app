@@ -19,13 +19,18 @@ music-visualizer **MP4** — ready for YouTube, TikTok or Reels.
 - 🔤 **9 bundled Khmer fonts** with pickers for title and captions:
   Noto Sans Khmer, Battambang, Moul, Koulen, Bokor, Dangrek, Suwannaphum,
   Preahvihear, Fasthand (all Google Fonts, SIL OFL license)
-- 💬 **AI subtitles (speech-to-text)** via faster-whisper — pick the
-  language (ខ្មែរ, English, …), generate, tick *Show subtitles*, and get
-  CapCut-style captions (Box / Bold Outline / Neon Glow). Edit in the
-  built-in SRT editor, or import/export `.srt` files
+- 💬 **Auto Captions like CapCut** — 🎙 Generate converts the audio's
+  speech/singing into timed text (speech-to-text); on first use the app
+  offers to install its AI engine (faster-whisper) automatically. Pick the
+  language (ខ្មែរ, English, …), tick *Show subtitles*, choose a caption
+  style (Box / Bold Outline / Neon Glow), fix words in the built-in SRT
+  editor, or import/export `.srt`
+- 📐 **CapCut-style ratios**: Original (match your image), 16:9, 9:16,
+  1:1, 4:3, 3:4, 2:1, 1.85:1, 2.35:1, 5.8-inch, 720p — plus Custom…
+  (type any width × height)
 - ✨ **Pro extras**: beat-zoom background, on-video progress bar,
   fade in/out (video + audio), logo/watermark with corner placement
-- 🌈 7 color themes, blur + darken sliders, YouTube/TikTok/Square presets
+- 🌈 7 color themes, blur + darken sliders
 - ⚡ Threaded ffmpeg rendering with progress and cancel — UI never freezes
 - 📦 No system ffmpeg needed — `imageio-ffmpeg` bundles the binary
 

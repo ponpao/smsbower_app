@@ -225,6 +225,45 @@ class CustomStyleDialog(ctk.CTkToplevel):
 
 
 # --------------------------------------------------------------------------
+# Custom video size dialog
+# --------------------------------------------------------------------------
+
+class CustomSizeDialog(ctk.CTkToplevel):
+    def __init__(self, master, current, on_ok):
+        super().__init__(master)
+        self.title("Custom Size")
+        self.geometry("300x230")
+        self.attributes("-topmost", True)
+        self.on_ok = on_ok
+
+        ctk.CTkLabel(self, text="📐 Custom video size",
+                     font=ctk.CTkFont(size=16, weight="bold")).pack(pady=(16, 8))
+        row = ctk.CTkFrame(self, fg_color="transparent")
+        row.pack(pady=4)
+        self.w_entry = ctk.CTkEntry(row, width=90, justify="center")
+        self.w_entry.insert(0, str(current[0]))
+        self.w_entry.pack(side="left")
+        ctk.CTkLabel(row, text="  ×  ").pack(side="left")
+        self.h_entry = ctk.CTkEntry(row, width=90, justify="center")
+        self.h_entry.insert(0, str(current[1]))
+        self.h_entry.pack(side="left")
+        ctk.CTkLabel(self, text="Width × Height in pixels (240 – 3840)",
+                     font=ctk.CTkFont(size=11), text_color=MUTED).pack(pady=(4, 8))
+        ctk.CTkButton(self, text="OK", fg_color=ACCENT, hover_color=ACCENT_HOVER,
+                      command=self._ok).pack(pady=6)
+
+    def _ok(self):
+        try:
+            w = max(240, min(3840, int(self.w_entry.get())))
+            h = max(240, min(3840, int(self.h_entry.get())))
+        except ValueError:
+            messagebox.showwarning("Custom size", "Please enter numbers.", parent=self)
+            return
+        self.on_ok((w, h))
+        self.destroy()
+
+
+# --------------------------------------------------------------------------
 # Subtitle editor dialog
 # --------------------------------------------------------------------------
 
@@ -355,8 +394,12 @@ class VisualizerFrame(ctk.CTkFrame):
             menu.grid(row=r + 1, column=c, sticky="ew", padx=(0, 8))
             return menu
 
-        self.res_menu = opt(0, 0, "Resolution", list(engine.RESOLUTIONS),
+        res_values = ([engine.RES_ORIGINAL] + list(engine.RESOLUTIONS)
+                      + [engine.RES_CUSTOM])
+        self.res_menu = opt(0, 0, "Ratio / Resolution", res_values,
                             list(engine.RESOLUTIONS)[0])
+        self.res_menu.configure(command=self._on_res_change)
+        self.custom_size = (1920, 1080)
         self.theme_menu = opt(0, 1, "Color Theme", list(engine.THEMES),
                               list(engine.THEMES)[0])
         self.fps_menu = opt(2, 0, "FPS", ["24", "30", "60"], "30")
@@ -441,7 +484,7 @@ class VisualizerFrame(ctk.CTkFrame):
         brow = ctk.CTkFrame(card, fg_color="transparent")
         brow.pack(fill="x", padx=14, pady=(8, 4))
         self.gen_subs_btn = ctk.CTkButton(
-            brow, text="🎙 Generate from audio (AI)", fg_color=ACCENT,
+            brow, text="🎙 Auto Captions — Generate", fg_color=ACCENT,
             hover_color=ACCENT_HOVER, command=self._generate_subs)
         self.gen_subs_btn.pack(side="left", fill="x", expand=True)
         for text, cmd in (("📝 Edit", self._edit_subs),
@@ -452,8 +495,10 @@ class VisualizerFrame(ctk.CTkFrame):
                           hover_color=("#b8bcc4", "#3a3a4d"),
                           text_color=("#111827", "#e5e7eb"),
                           command=cmd).pack(side="left", padx=(6, 0))
-        self.subs_info = ctk.CTkLabel(card, text="No subtitles yet.",
-                                      font=ctk.CTkFont(size=11), text_color=MUTED)
+        self.subs_info = ctk.CTkLabel(
+            card, text="Auto Captions: បំលែងសំឡេងចម្រៀង/និយាយ ទៅជាអក្សរតាមពេលវេលា ដូច CapCut។",
+            font=ctk.CTkFont(size=11), text_color=MUTED, wraplength=520,
+            justify="left")
         self.subs_info.pack(anchor="w", padx=14, pady=(0, 8))
 
         # ---- pro extras card ----
@@ -488,15 +533,21 @@ class VisualizerFrame(ctk.CTkFrame):
             ctk.CTkLabel(left, text="ℹ️ Drag & drop needs 'pip install tkinterdnd2' — click a card to browse.",
                          font=ctk.CTkFont(size=11),
                          text_color=("#9a6700", "#d4a72c")).pack(anchor="w", pady=(6, 0))
-        if not engine.raqm_available():
-            ctk.CTkLabel(
-                left,
-                text=("⚠️ អក្សរខ្មែរនឹងរាយមិនត្រឹមត្រូវ (ជើង/ស្រៈខុសកន្លែង) — Pillow "
-                      "របស់អ្នកខ្វះ Raqm text shaping.\n"
-                      "ដំណោះស្រាយ:  pip install --upgrade --force-reinstall pillow"),
-                font=ctk.CTkFont(size=11), justify="left",
-                text_color=("#b91c1c", "#f87171"), wraplength=520,
-            ).pack(anchor="w", pady=(6, 0))
+        ks = engine.khmer_support()
+        problems = []
+        if not ks["fonts_ok"]:
+            problems.append(
+                "⚠️ រកមិនឃើញ folder 'visualizer/fonts/' — Khmer fonts បាត់! "
+                "ត្រូវ copy folder fonts ជាមួយកម្មវិធីផង។")
+        if not ks["raqm_ok"]:
+            problems.append(
+                "⚠️ អក្សរខ្មែររាយខុស (ជើង/ស្រៈខុសកន្លែង ឬមានសញ្ញា ◌) — Pillow "
+                f"{ks['pillow_version']} របស់អ្នកខ្វះ Raqm text shaping.\n"
+                "ដំណោះស្រាយ:  pip install --upgrade --force-reinstall pillow")
+        for msg in problems:
+            ctk.CTkLabel(left, text=msg, font=ctk.CTkFont(size=11), justify="left",
+                         text_color=("#b91c1c", "#f87171"), wraplength=520,
+                         ).pack(anchor="w", pady=(6, 0))
 
     def _build_right(self, right):
         card = ctk.CTkFrame(right, corner_radius=16, fg_color=CARD,
@@ -620,6 +671,29 @@ class VisualizerFrame(ctk.CTkFrame):
         self._status("❌ Audio error.")
         messagebox.showerror("Audio error", msg)
 
+    def _on_res_change(self, value):
+        if value == engine.RES_CUSTOM:
+            CustomSizeDialog(self, self.custom_size, self._set_custom_size)
+        self._pv_key = None
+
+    def _set_custom_size(self, size):
+        self.custom_size = engine.even_size(size)
+        self._pv_key = None
+        self._status(f"Custom size: {self.custom_size[0]}×{self.custom_size[1]}")
+
+    def _current_size(self):
+        sel = self.res_menu.get()
+        if sel == engine.RES_ORIGINAL:
+            if self.image_path:
+                try:
+                    return engine.size_from_image(self.image_path)
+                except Exception:
+                    pass
+            return (1920, 1080)
+        if sel == engine.RES_CUSTOM:
+            return self.custom_size
+        return engine.RESOLUTIONS[sel]
+
     def _choose_watermark(self):
         p = filedialog.askopenfilename(
             filetypes=[("Image", "*.png *.jpg *.jpeg *.webp")])
@@ -638,12 +712,30 @@ class VisualizerFrame(ctk.CTkFrame):
         if not self.audio_path:
             messagebox.showwarning("No audio", "Drop an audio file first.")
             return
+        need_install = not engine.whisper_available()
+        if need_install:
+            if getattr(sys, "frozen", False):
+                messagebox.showwarning(
+                    "Auto Captions",
+                    "This build doesn't include the AI caption engine.\n"
+                    "Use '📂 Import SRT' instead, or ask for a build with "
+                    "faster-whisper included.")
+                return
+            if not messagebox.askyesno(
+                    "Auto Captions — one-time setup",
+                    "AI caption engine (faster-whisper) មិនទាន់មាននៅឡើយ។\n\n"
+                    "ទាញយក និង install ឥឡូវនេះ? (~100 MB, ម្តងគត់)\n"
+                    "បន្ទាប់មក Auto Captions នឹងដំណើរការភ្លាម។"):
+                return
         self.gen_subs_btn.configure(state="disabled", text="🎙 Working…")
         lang = LANGUAGES[self.lang_menu.get()]
         model = self.model_menu.get()
 
         def worker():
             try:
+                if need_install:
+                    engine.install_whisper(
+                        progress_cb=lambda m: self.after(0, self._status, m))
                 subs = engine.transcribe(
                     self.audio_path, language=lang, model_size=model,
                     progress_cb=lambda m: self.after(0, self._status, "🎙 " + m))
@@ -657,7 +749,7 @@ class VisualizerFrame(ctk.CTkFrame):
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_subs_ready(self, subs):
-        self.gen_subs_btn.configure(state="normal", text="🎙 Generate from audio (AI)")
+        self.gen_subs_btn.configure(state="normal", text="🎙 Auto Captions — Generate")
         self.subtitles = subs
         if subs:
             self.subs_var.set(True)
@@ -668,7 +760,7 @@ class VisualizerFrame(ctk.CTkFrame):
             self._status("No speech detected.")
 
     def _on_subs_error(self, msg, is_install):
-        self.gen_subs_btn.configure(state="normal", text="🎙 Generate from audio (AI)")
+        self.gen_subs_btn.configure(state="normal", text="🎙 Auto Captions — Generate")
         self._status("Subtitle generation failed.")
         messagebox.showwarning("AI subtitles" if is_install else "Subtitle error", msg)
 
@@ -711,7 +803,7 @@ class VisualizerFrame(ctk.CTkFrame):
     def _current_opts(self):
         return {
             "style": self.style_menu.get(),
-            "size": engine.RESOLUTIONS[self.res_menu.get()],
+            "size": self._current_size(),
             "fps": int(self.fps_menu.get()),
             "theme": self.theme_menu.get(),
             "blur": float(self.blur_slider.get()),
@@ -737,7 +829,7 @@ class VisualizerFrame(ctk.CTkFrame):
     # ---------------- live preview ----------------
 
     def _preview_size(self):
-        w, h = engine.RESOLUTIONS[self.res_menu.get()]
+        w, h = self._current_size()
         pw = PREVIEW_W
         ph = int(pw * h / w)
         if ph > 340:

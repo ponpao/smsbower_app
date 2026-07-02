@@ -18,6 +18,7 @@ import math
 import os
 import re
 import subprocess
+import sys
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -39,12 +40,41 @@ THEMES = {
     "Pure White": ((245, 245, 245), (160, 160, 160)),
 }
 
+# CapCut-style aspect-ratio presets. The UI adds "Original (image)" and
+# "Custom…" on top of these.
 RESOLUTIONS = {
-    "YouTube 1080p (1920×1080)": (1920, 1080),
+    "16:9 — YouTube (1920×1080)": (1920, 1080),
+    "9:16 — TikTok/Reels (1080×1920)": (1080, 1920),
+    "1:1 — Square (1080×1080)": (1080, 1080),
+    "4:3 (1440×1080)": (1440, 1080),
+    "3:4 (1080×1440)": (1080, 1440),
+    "2:1 (1920×960)": (1920, 960),
+    "1.85:1 — Cinema (1920×1038)": (1920, 1038),
+    "2.35:1 — Cinemascope (1920×816)": (1920, 816),
+    "5.8-inch (1080×2340)": (1080, 2340),
     "HD 720p (1280×720)": (1280, 720),
-    "Square (1080×1080)": (1080, 1080),
-    "TikTok / Reels (1080×1920)": (1080, 1920),
 }
+
+RES_ORIGINAL = "Original (image ratio)"
+RES_CUSTOM = "Custom…"
+
+
+def even_size(size):
+    """H.264 yuv420p needs even dimensions."""
+    return (max(2, int(size[0]) // 2 * 2), max(2, int(size[1]) // 2 * 2))
+
+
+def size_from_image(image_path, short_side=1080, max_long=2560):
+    """Video size matching the dropped image's own aspect ratio."""
+    from PIL import Image as _Image
+    with _Image.open(image_path) as im:
+        w0, h0 = im.size
+    scale = short_side / min(w0, h0)
+    w, h = w0 * scale, h0 * scale
+    if max(w, h) > max_long:
+        f = max_long / max(w, h)
+        w, h = w * f, h * f
+    return even_size((w, h))
 
 TITLE_POSITIONS = [
     "Top Left", "Top Center", "Top Right",
@@ -180,6 +210,16 @@ def raqm_available():
         return False
 
 
+def khmer_support():
+    """Diagnose why Khmer text might render wrong on this machine."""
+    import PIL
+    return {
+        "fonts_ok": os.path.exists(os.path.join(FONT_DIR, "NotoSansKhmer-VF.ttf")),
+        "raqm_ok": raqm_available(),
+        "pillow_version": getattr(PIL, "__version__", "?"),
+    }
+
+
 def _try_font(name, px, bold, vf=False):
     key = (name, px, bold)
     if key in _font_cache:
@@ -295,6 +335,33 @@ def format_srt(subs):
     for i, (start, end, text) in enumerate(subs, 1):
         out.append(f"{i}\n{_fmt_time(start)} --> {_fmt_time(end)}\n{text}\n")
     return "\n".join(out)
+
+
+def whisper_available():
+    try:
+        import faster_whisper  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def install_whisper(progress_cb=None):
+    """Install faster-whisper with pip (Auto Captions one-click setup)."""
+    if getattr(sys, "frozen", False):
+        raise RuntimeError(
+            "This packaged build has no pip. Ask the app developer to "
+            "bundle faster-whisper, or use 'Import SRT' instead."
+        )
+    cmd = [sys.executable, "-m", "pip", "install", "faster-whisper"]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, creationflags=_no_window())
+    for line in proc.stdout:
+        if progress_cb and line.strip():
+            progress_cb("Installing AI engine… " + line.strip()[:70])
+    if proc.wait() != 0:
+        raise RuntimeError(
+            "Install failed. Run manually:\n    pip install faster-whisper"
+        )
 
 
 def transcribe(audio_path, language=None, model_size="small", progress_cb=None):
@@ -934,7 +1001,7 @@ def compose_frame(assets, i, opts):
 def render_video(image_path, audio_path, out_path, opts,
                  progress_cb=None, cancel_event=None):
     fps = int(opts.get("fps", 30))
-    size = tuple(opts.get("size", (1920, 1080)))
+    size = even_size(opts.get("size", (1920, 1080)))
     an = opts.get("_analysis")
     if an is None or an.fps != fps:
         an = analyze(audio_path, fps)

@@ -1,9 +1,10 @@
 {
-  "version": "3.2.1",
+  "version": "3.3.0",
   "release_date": "2026-07-02",
-  "download_url": "https://github.com/ponpao/smsbower_app/releases/download/V3.2.1/TRAVKOD.CODEs.3.2.1.exe",
+  "download_url": "https://github.com/ponpao/smsbower_app/releases/download/V3.3.0/TRAVKOD.CODEs.3.3.0.exe",
   "changelog": [
-    "Visualizer: ថែម Font ខ្មែរស្អាតៗ 9 ជម្រើស (Moul, Battambang, Koulen, Bokor, Dangrek, Suwannaphum, Preahvihear, Fasthand, Noto) សម្រាប់ Title និង Subtitle",
-    "Visualizer: ពិនិត្យ Raqm text shaping ស្វ័យប្រវត្តិ — បង្ហាញការណែនាំដោះស្រាយ បើអក្សរខ្មែររាយខុស"
+    "Visualizer: ថែម Ratio ដូច CapCut — Original (តាមរូបភាព), 16:9, 9:16, 1:1, 4:3, 3:4, 2:1, 1.85:1, 2.35:1, 5.8-inch និង Custom Size",
+    "Visualizer: Auto Captions ដូច CapCut — ចុច Generate បំលែងសំឡេងជាអក្សរតាមពេលវេលា ហើយ install AI engine ដោយស្វ័យប្រវត្តិលើកដំបូង",
+    "Visualizer: ពិនិត្យបញ្ហាអក្សរខ្មែរច្បាស់ជាងមុន — បង្ហាញមូលហេតុ (fonts folder បាត់ ឬ Pillow ខ្វះ Raqm) និងវិធីដោះស្រាយ"
   ]
 }
