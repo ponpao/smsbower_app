@@ -1,8 +1,13 @@
 {
-  "version": "3.1.0",
-  "release_date": "2026-07-01",
-  "download_url": "https://github.com/ponpao/smsbower_app/releases/download/V3.1.0/TRAVKOD.CODEs.3.1.0.exe",
+  "version": "3.2.0",
+  "release_date": "2026-07-02",
+  "download_url": "https://github.com/ponpao/smsbower_app/releases/download/V3.2.0/TRAVKOD.CODEs.3.2.0.exe",
   "changelog": [
-    "ថែមមុខងារ Visualizer ថ្មី (Tab 4 ក្បែរ AI Song) — ទម្លាក់រូបភាព + ចម្រៀង ដើម្បីបង្កើតវីដេអូ Music Visualizer ទំនើប (Neon Bars, Circular Spectrum, Waveform)"
+    "Visualizer: គាំទ្រអក្សរខ្មែរពេញលេញ (Title + Subtitle) ដោយភ្ជាប់ Font Noto Sans Khmer",
+    "Visualizer: Live Preview លើ UI ផ្ទាល់ — Play/Pause, Seek, មានសំឡេង",
+    "Visualizer: Style 12 ជម្រើស + Custom Visualizer Builder (Bars/Dots/Line, Mirror, Reflection...)",
+    "Visualizer: Title អាចប្តូរអក្សរ ទីតាំង 7 កន្លែង និងទំហំ ពង្រីក/បង្រួម",
+    "Visualizer: AI Subtitle (Convert audio to text) ជាមួយ Caption style ដូច CapCut + SRT Editor/Import/Export",
+    "Visualizer: មុខងារទំនើប — Beat Zoom, Progress Bar, Fade In/Out, Logo Watermark"
   ]
 }
