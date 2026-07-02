@@ -210,12 +210,23 @@ def raqm_available():
         return False
 
 
+def khmer_shaper_available():
+    """Our own HarfBuzz+FreeType Khmer shaper — works on ANY Pillow build."""
+    try:
+        import uharfbuzz  # noqa: F401
+        import freetype   # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
 def khmer_support():
     """Diagnose why Khmer text might render wrong on this machine."""
     import PIL
     return {
         "fonts_ok": os.path.exists(os.path.join(FONT_DIR, "NotoSansKhmer-VF.ttf")),
         "raqm_ok": raqm_available(),
+        "hb_ok": khmer_shaper_available(),
         "pillow_version": getattr(PIL, "__version__", "?"),
     }
 
@@ -272,14 +283,169 @@ def load_font(px, text="", bold=True, family=None):
     return ImageFont.load_default()
 
 
-def wrap_text(draw, text, font, max_width):
+def resolve_khmer_font_path(family=None, bold=True):
+    """Absolute path of a Khmer-capable font file (for the HB shaper)."""
+    if family in KHMER_FONTS:
+        spec = KHMER_FONTS[family]
+        fname = spec.get("bold") if (bold and spec.get("bold")) else spec["file"]
+        p = os.path.join(FONT_DIR, fname)
+        if os.path.exists(p):
+            return p, spec.get("vf", False)
+    p = os.path.join(FONT_DIR, "NotoSansKhmer-VF.ttf")
+    if os.path.exists(p):
+        return p, True
+    windir = os.environ.get("WINDIR", r"C:\Windows")
+    for name in ("khmeruib.ttf", "khmerui.ttf", "leelauib.ttf", "leelawui.ttf"):
+        p = os.path.join(windir, "Fonts", name)
+        if os.path.exists(p):
+            return p, False
+    return None, False
+
+
+class _HBFont:
+    """HarfBuzz shaping + FreeType rasterizing for one (font, px, bold).
+
+    Correct Khmer cluster shaping (ជើង, pre-base vowels) on any Pillow
+    build — no Raqm needed.
+    """
+    _cache = {}
+
+    @classmethod
+    def get(cls, path, px, bold, vf):
+        key = (path, px, bold)
+        if key not in cls._cache:
+            cls._cache[key] = cls(path, px, bold, vf)
+        return cls._cache[key]
+
+    def __init__(self, path, px, bold, vf):
+        import freetype
+        import uharfbuzz as hb
+        self.px = px
+        self.ft = freetype.Face(path)
+        self.ft.set_pixel_sizes(0, px)
+        self.hb_font = hb.Font(hb.Face(open(path, "rb").read()))
+        self.hb_font.scale = (px * 64, px * 64)
+        if vf and bold:
+            try:
+                self.hb_font.set_variations({"wght": 700.0})
+                self.ft.set_var_design_coords((100.0, 700.0))  # wdth, wght
+            except Exception:
+                pass
+        self.ascent = self.ft.size.ascender / 64.0
+        self.descent = -self.ft.size.descender / 64.0
+        self._mask_cache = {}
+
+    def shape(self, text):
+        import uharfbuzz as hb
+        buf = hb.Buffer()
+        buf.add_str(text)
+        buf.guess_segment_properties()
+        hb.shape(self.hb_font, buf)
+        glyphs, pen = [], 0.0
+        for info, pos in zip(buf.glyph_infos, buf.glyph_positions):
+            glyphs.append((info.codepoint,
+                           pen + pos.x_offset / 64.0, pos.y_offset / 64.0))
+            pen += pos.x_advance / 64.0
+        return glyphs, pen
+
+    def width(self, text):
+        return self.shape(text)[1]
+
+    def render_mask(self, text):
+        """Tight-ish alpha mask + baseline position inside it + advance."""
+        if text in self._mask_cache:
+            return self._mask_cache[text]
+        import freetype
+        glyphs, adv = self.shape(text)
+        pad = max(4, self.px // 3)
+        W = int(math.ceil(adv)) + 2 * pad
+        H = int((self.ascent + self.descent) * 1.6) + 2 * pad
+        baseline = pad + int(self.ascent * 1.15)
+        arr = np.zeros((H, W), np.uint8)
+        for gid, gx, gy in glyphs:
+            self.ft.load_glyph(gid, freetype.FT_LOAD_RENDER)
+            bmp = self.ft.glyph.bitmap
+            gw, gh = bmp.width, bmp.rows
+            if gw == 0 or gh == 0:
+                continue
+            g = np.array(bmp.buffer, dtype=np.uint8).reshape(gh, bmp.pitch)[:, :gw]
+            x0 = int(round(pad + gx + self.ft.glyph.bitmap_left))
+            y0 = int(round(baseline - gy - self.ft.glyph.bitmap_top))
+            xa, ya = max(0, x0), max(0, y0)
+            xb, yb = min(W, x0 + gw), min(H, y0 + gh)
+            if xa >= xb or ya >= yb:
+                continue
+            sub = g[ya - y0:yb - y0, xa - x0:xb - x0]
+            arr[ya:yb, xa:xb] = np.maximum(arr[ya:yb, xa:xb], sub)
+        result = (Image.fromarray(arr, "L"), pad, baseline, adv)
+        if len(self._mask_cache) > 64:
+            self._mask_cache.clear()
+        self._mask_cache[text] = result
+        return result
+
+
+class TextEngine:
+    """Unified measure/draw for titles & captions.
+
+    Khmer text goes through HarfBuzz+FreeType when available (perfect ជើង
+    even without Pillow-Raqm); everything else uses PIL.
+    """
+
+    def __init__(self, px, sample_text="", family=None, bold=True):
+        self.px = px
+        self.hb = None
+        if text_has_khmer(sample_text) and khmer_shaper_available():
+            path, vf = resolve_khmer_font_path(family, bold)
+            if path:
+                try:
+                    self.hb = _HBFont.get(path, px, bold, vf)
+                except Exception:
+                    self.hb = None
+        if self.hb is not None:
+            self.ascent, self.descent = self.hb.ascent, self.hb.descent
+            self.pil_font = None
+        else:
+            self.pil_font = load_font(px, sample_text, bold, family)
+            self.ascent, self.descent = self.pil_font.getmetrics()
+
+    def width(self, text):
+        if self.hb is not None:
+            return self.hb.width(text)
+        return ImageDraw.Draw(Image.new("RGB", (1, 1))).textlength(
+            text, font=self.pil_font)
+
+    def draw(self, img, xy, text, fill, stroke_width=0, stroke_fill=None):
+        """Draw `text` with baseline-left at `xy` (like PIL anchor 'ls')."""
+        x, by = xy
+        if self.hb is None:
+            ImageDraw.Draw(img, "RGBA").text(
+                (x, by), text, font=self.pil_font, fill=fill, anchor="ls",
+                stroke_width=stroke_width,
+                stroke_fill=stroke_fill if stroke_width else None)
+            return
+        mask, pad, baseline, _ = self.hb.render_mask(text)
+        pos = (int(round(x)) - pad, int(round(by)) - baseline)
+        if stroke_width and stroke_fill:
+            smask = mask.filter(ImageFilter.MaxFilter(2 * stroke_width + 1))
+            img.paste(stroke_fill[:3], pos, _alpha_mask(smask, stroke_fill))
+        img.paste(fill[:3], pos, _alpha_mask(mask, fill))
+
+
+def _alpha_mask(mask, color):
+    alpha = color[3] if len(color) > 3 else 255
+    if alpha >= 255:
+        return mask
+    return mask.point(lambda v: v * alpha // 255)
+
+
+def wrap_text(text, max_width, width_func):
     words = text.split()
     if not words:
         return [text]
     lines, cur = [], words[0]
     for word in words[1:]:
         trial = cur + " " + word
-        if draw.textlength(trial, font=font) <= max_width:
+        if width_func(trial) <= max_width:
             cur = trial
         else:
             lines.append(cur)
@@ -833,21 +999,29 @@ _TITLE_ANCHOR = {
 }
 
 
-def draw_title(frame, text, c1, position="Bottom Center", scale=1.0, family=None):
+def draw_title(frame, text, c1, position="Bottom Center", scale=1.0, family=None,
+               custom=None):
+    """`custom` = (fx, fy) fractional center — lets the user drag the title
+    anywhere on the preview; when set it overrides `position`."""
     if not text:
         return
     w, h = frame.size
     px = max(14, int(h * 0.038 * scale))
-    font = load_font(px, text, family=family)
+    te = TextEngine(px, text, family)
     draw = ImageDraw.Draw(frame, "RGBA")
-    fx, fy, align = _TITLE_ANCHOR.get(position, _TITLE_ANCHOR["Bottom Center"])
-    tw = draw.textlength(text, font=font)
-    asc, desc = font.getmetrics()
-    x = int(w * fx - (tw if align == "rs" else tw / 2 if align == "ms" else 0))
-    y = int(h * fy - (asc + desc) / 2 + asc) if fy == 0.5 else \
-        int(h * fy + asc) if fy < 0.5 else int(h * fy)
-    draw.text((x + 2, y + 2), text, font=font, fill=(0, 0, 0, 160), anchor="ls")
-    draw.text((x, y), text, font=font, fill=(245, 245, 245, 235), anchor="ls")
+    tw = te.width(text)
+    asc, desc = te.ascent, te.descent
+    if custom:
+        cx, cy = custom
+        x = int(w * cx - tw / 2)
+        y = int(h * cy + (asc - desc) / 2)
+    else:
+        fx, fy, align = _TITLE_ANCHOR.get(position, _TITLE_ANCHOR["Bottom Center"])
+        x = int(w * fx - (tw if align == "rs" else tw / 2 if align == "ms" else 0))
+        y = int(h * fy - (asc + desc) / 2 + asc) if fy == 0.5 else \
+            int(h * fy + asc) if fy < 0.5 else int(h * fy)
+    te.draw(frame, (x + 2, y + 2), text, (0, 0, 0, 160))
+    te.draw(frame, (x, y), text, (245, 245, 245, 235))
     pad = int(px * 0.45)
     draw.rounded_rectangle(
         (x - pad, y - asc - pad // 2, x + tw + pad, y + desc + pad // 2),
@@ -855,22 +1029,22 @@ def draw_title(frame, text, c1, position="Bottom Center", scale=1.0, family=None
     )
 
 
-def draw_subtitle(frame, text, style, c1, c2, family=None):
+def draw_subtitle(frame, text, style, c1, c2, family=None, scale=1.0, y_frac=0.80):
     if not text:
         return
     w, h = frame.size
-    px = max(15, int(h * 0.045))
-    font = load_font(px, text, family=family)
+    px = max(13, int(h * 0.045 * scale))
+    te = TextEngine(px, text, family)
     draw = ImageDraw.Draw(frame, "RGBA")
-    lines = wrap_text(draw, text, font, int(w * 0.82))
-    asc, desc = font.getmetrics()
+    lines = wrap_text(text, int(w * 0.82), te.width)
+    asc, desc = te.ascent, te.descent
     line_h = int((asc + desc) * 1.18)
     total_h = line_h * len(lines)
-    y0 = int(h * 0.80) - total_h
+    y0 = int(h * y_frac) - total_h
     stroke = max(2, px // 12)
 
     if style == "CapCut Box":
-        widths = [draw.textlength(l, font=font) for l in lines]
+        widths = [te.width(l) for l in lines]
         box_w = max(widths) + px * 1.2
         pad_y = px * 0.45
         bx0 = (w - box_w) / 2
@@ -884,19 +1058,18 @@ def draw_subtitle(frame, text, style, c1, c2, family=None):
             radius=max(8, px // 3), outline=c1 + (110,), width=max(2, px // 16),
         )
     for li, line in enumerate(lines):
-        lw = draw.textlength(line, font=font)
+        lw = te.width(line)
         x = (w - lw) / 2
         y = y0 + li * line_h + asc
         if style == "Bold Outline":
-            draw.text((x, y), line, font=font, fill=(255, 255, 255, 245),
-                      stroke_width=stroke, stroke_fill=(0, 0, 0, 230), anchor="ls")
+            te.draw(frame, (x, y), line, (255, 255, 255, 245),
+                    stroke_width=stroke, stroke_fill=(0, 0, 0, 230))
         elif style == "Neon Glow":
-            draw.text((x, y), line, font=font, fill=(255, 255, 255, 245),
-                      stroke_width=stroke + 1, stroke_fill=c1 + (200,), anchor="ls")
+            te.draw(frame, (x, y), line, (255, 255, 255, 245),
+                    stroke_width=stroke + 1, stroke_fill=c1 + (200,))
         else:  # CapCut Box
-            draw.text((x, y), line, font=font, fill=(255, 255, 255, 245),
-                      stroke_width=max(1, stroke // 2), stroke_fill=(0, 0, 0, 140),
-                      anchor="ls")
+            te.draw(frame, (x, y), line, (255, 255, 255, 245),
+                    stroke_width=max(1, stroke // 2), stroke_fill=(0, 0, 0, 140))
 
 
 def draw_progress(frame, fraction, c1, c2):
@@ -963,21 +1136,43 @@ def compose_frame(assets, i, opts):
     else:
         frame = assets.background.copy()
 
-    draw_style(frame, opts.get("style", "Neon Bars"), an, i, c1, c2,
-               assets.center_art, opts.get("custom"))
+    style = opts.get("style", "Neon Bars")
+    vis_dx = float(opts.get("vis_dx", 0.0))
+    vis_dy = float(opts.get("vis_dy", 0.0))
+    vis_scale = float(opts.get("vis_scale", 1.0))
+    w, h = assets.size
+    if abs(vis_dx) > 0.002 or abs(vis_dy) > 0.002 or abs(vis_scale - 1.0) > 0.01:
+        # draw the visualizer on its own layer so it can move/scale anywhere
+        overlay = Image.new("RGBA", assets.size, (0, 0, 0, 0))
+        draw_style(overlay, style, an, i, c1, c2,
+                   assets.center_art, opts.get("custom"))
+        if abs(vis_scale - 1.0) > 0.01:
+            nw = max(2, int(w * vis_scale))
+            nh = max(2, int(h * vis_scale))
+            overlay = overlay.resize((nw, nh), Image.BILINEAR)
+        else:
+            nw, nh = w, h
+        pos = (int((w - nw) / 2 + vis_dx * w), int((h - nh) / 2 + vis_dy * h))
+        frame.paste(overlay, pos, overlay)
+    else:
+        draw_style(frame, style, an, i, c1, c2,
+                   assets.center_art, opts.get("custom"))
 
     if opts.get("show_title") and opts.get("title_text"):
         draw_title(frame, opts["title_text"], c1,
                    opts.get("title_pos", "Bottom Center"),
                    opts.get("title_scale", 1.0),
-                   family=opts.get("title_font"))
+                   family=opts.get("title_font"),
+                   custom=opts.get("title_custom"))
 
     if opts.get("show_subs") and opts.get("subtitles"):
         t = i / an.fps
         text = find_subtitle(opts["subtitles"], t)
         if text:
             draw_subtitle(frame, text, opts.get("sub_style", "CapCut Box"), c1, c2,
-                          family=opts.get("sub_font"))
+                          family=opts.get("sub_font"),
+                          scale=float(opts.get("sub_scale", 1.0)),
+                          y_frac=float(opts.get("sub_y", 0.80)))
 
     if opts.get("progress_bar"):
         draw_progress(frame, i / max(1, an.num_frames - 1), c1, c2)

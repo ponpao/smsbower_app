@@ -1,10 +1,11 @@
 {
-  "version": "3.3.0",
+  "version": "3.4.0",
   "release_date": "2026-07-02",
-  "download_url": "https://github.com/ponpao/smsbower_app/releases/download/V3.3.0/TRAVKOD.CODEs.3.3.0.exe",
+  "download_url": "https://github.com/ponpao/smsbower_app/releases/download/V3.4.0/TRAVKOD.CODEs.3.4.0.exe",
   "changelog": [
-    "Visualizer: ថែម Ratio ដូច CapCut — Original (តាមរូបភាព), 16:9, 9:16, 1:1, 4:3, 3:4, 2:1, 1.85:1, 2.35:1, 5.8-inch និង Custom Size",
-    "Visualizer: Auto Captions ដូច CapCut — ចុច Generate បំលែងសំឡេងជាអក្សរតាមពេលវេលា ហើយ install AI engine ដោយស្វ័យប្រវត្តិលើកដំបូង",
-    "Visualizer: ពិនិត្យបញ្ហាអក្សរខ្មែរច្បាស់ជាងមុន — បង្ហាញមូលហេតុ (fonts folder បាត់ ឬ Pillow ខ្វះ Raqm) និងវិធីដោះស្រាយ"
+    "Visualizer: ដោះស្រាយអក្សរខ្មែរដាច់ជើង/ស្រៈ ១០០% — ប្រើ HarfBuzz shaping ផ្ទាល់ខ្លួន មិនពឹង Pillow ទៀតទេ",
+    "Visualizer: រំកិល Visualizer បានគ្រប់ទីកន្លែង (Move X/Y + Scale 30–170%)",
+    "Visualizer: អូស Title លើ Preview ដើម្បីដាក់គ្រប់ទីកន្លែង",
+    "Visualizer: Subtitle custom បន្ថែម — ទំហំអក្សរ និងទីតាំងឡើងចុះ + កែ Timing ក្នុង SRT Editor"
   ]
 }

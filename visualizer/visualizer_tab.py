@@ -312,6 +312,8 @@ class VisualizerFrame(ctk.CTkFrame):
         self.watermark_path = None
         self.subtitles = []
         self.custom_cfg = dict(engine.DEFAULT_CUSTOM)
+        self.title_custom = None          # (fx, fy) after dragging on preview
+        self._pv_disp_size = None         # size of the frame shown in preview
         self.analysis = None            # engine.Analysis at PREVIEW_FPS
         self._analyzing = False
         self._cancel = threading.Event()
@@ -407,6 +409,33 @@ class VisualizerFrame(ctk.CTkFrame):
         self.blur_slider = self._slider(card, "Background blur", 0, 30, 12)
         self.dark_slider = self._slider(card, "Background darken", 0, 80, 35)
 
+        ctk.CTkLabel(card, text="Visualizer position — Move X / Move Y / Scale",
+                     font=ctk.CTkFont(size=11, weight="bold")
+                     ).pack(anchor="w", padx=14, pady=(6, 0))
+        vrow = ctk.CTkFrame(card, fg_color="transparent")
+        vrow.pack(fill="x", padx=14, pady=(0, 4))
+        vrow.grid_columnconfigure((0, 1, 2), weight=1)
+        self.vis_x = ctk.CTkSlider(vrow, from_=-50, to=50,
+                                   progress_color=ACCENT, button_color=ACCENT)
+        self.vis_x.set(0)
+        self.vis_x.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        self.vis_y = ctk.CTkSlider(vrow, from_=-50, to=50,
+                                   progress_color=ACCENT, button_color=ACCENT)
+        self.vis_y.set(0)
+        self.vis_y.grid(row=0, column=1, sticky="ew", padx=(0, 8))
+        self.vis_scale = ctk.CTkSlider(vrow, from_=30, to=170,
+                                       progress_color=ACCENT, button_color=ACCENT)
+        self.vis_scale.set(100)
+        self.vis_scale.grid(row=0, column=2, sticky="ew")
+        reset_row = ctk.CTkFrame(card, fg_color="transparent")
+        reset_row.pack(fill="x", padx=14, pady=(0, 8))
+        ctk.CTkButton(reset_row, text="↺ Reset position", width=110, height=24,
+                      font=ctk.CTkFont(size=11),
+                      fg_color=("#d1d5db", "#2b2b3a"),
+                      hover_color=("#b8bcc4", "#3a3a4d"),
+                      text_color=("#111827", "#e5e7eb"),
+                      command=self._reset_vis_pos).pack(side="left")
+
         # ---- title card ----
         card = self._card(left, "🏷️ Title")
         self.title_var = ctk.BooleanVar(value=True)
@@ -429,7 +458,8 @@ class VisualizerFrame(ctk.CTkFrame):
                      ).grid(row=0, column=1, sticky="w")
         self.title_pos_menu = ctk.CTkOptionMenu(
             trow, values=engine.TITLE_POSITIONS, fg_color=ACCENT,
-            button_color=ACCENT_HOVER, button_hover_color=ACCENT_HOVER)
+            button_color=ACCENT_HOVER, button_hover_color=ACCENT_HOVER,
+            command=self._on_title_pos_menu)
         self.title_pos_menu.set("Bottom Center")
         self.title_pos_menu.grid(row=1, column=1, sticky="ew", padx=(0, 8))
         ctk.CTkLabel(trow, text="Size", font=ctk.CTkFont(size=11, weight="bold")
@@ -438,7 +468,11 @@ class VisualizerFrame(ctk.CTkFrame):
                                         progress_color=ACCENT, button_color=ACCENT)
         self.title_size.set(1.0)
         self.title_size.grid(row=1, column=2, sticky="ew", pady=(8, 0))
-        ctk.CTkFrame(card, fg_color="transparent", height=8).pack()
+        ctk.CTkLabel(card,
+                     text="💡 អូស Title លើ Preview ដើម្បីរំកិលទៅគ្រប់ទីកន្លែង (Position menu = reset)",
+                     font=ctk.CTkFont(size=11), text_color=MUTED,
+                     wraplength=520, justify="left").pack(anchor="w", padx=14,
+                                                          pady=(4, 8))
 
         # ---- subtitles card ----
         card = self._card(left, "💬 Subtitles (CapCut-style)")
@@ -480,6 +514,18 @@ class VisualizerFrame(ctk.CTkFrame):
                                                 button_hover_color=ACCENT_HOVER)
         self.sub_style_menu.set(engine.SUBTITLE_STYLES[0])
         self.sub_style_menu.grid(row=1, column=2, sticky="ew")
+        ctk.CTkLabel(srow, text="Caption size", font=ctk.CTkFont(size=11, weight="bold")
+                     ).grid(row=2, column=1, sticky="w", pady=(6, 0))
+        self.sub_size = ctk.CTkSlider(srow, from_=60, to=200,
+                                      progress_color=ACCENT, button_color=ACCENT)
+        self.sub_size.set(100)
+        self.sub_size.grid(row=3, column=1, sticky="ew", padx=(0, 6))
+        ctk.CTkLabel(srow, text="Caption position ↕", font=ctk.CTkFont(size=11, weight="bold")
+                     ).grid(row=2, column=2, sticky="w", pady=(6, 0))
+        self.sub_pos = ctk.CTkSlider(srow, from_=30, to=95,
+                                     progress_color=ACCENT, button_color=ACCENT)
+        self.sub_pos.set(80)
+        self.sub_pos.grid(row=3, column=2, sticky="ew")
 
         brow = ctk.CTkFrame(card, fg_color="transparent")
         brow.pack(fill="x", padx=14, pady=(8, 4))
@@ -539,11 +585,10 @@ class VisualizerFrame(ctk.CTkFrame):
             problems.append(
                 "⚠️ រកមិនឃើញ folder 'visualizer/fonts/' — Khmer fonts បាត់! "
                 "ត្រូវ copy folder fonts ជាមួយកម្មវិធីផង។")
-        if not ks["raqm_ok"]:
+        if not ks["raqm_ok"] and not ks["hb_ok"]:
             problems.append(
-                "⚠️ អក្សរខ្មែររាយខុស (ជើង/ស្រៈខុសកន្លែង ឬមានសញ្ញា ◌) — Pillow "
-                f"{ks['pillow_version']} របស់អ្នកខ្វះ Raqm text shaping.\n"
-                "ដំណោះស្រាយ:  pip install --upgrade --force-reinstall pillow")
+                "⚠️ អក្សរខ្មែរនឹងរាយខុស (ជើង/ស្រៈខុសកន្លែង) — ដំណោះស្រាយ (មួយជួរគត់):\n"
+                "pip install uharfbuzz freetype-py")
         for msg in problems:
             ctk.CTkLabel(left, text=msg, font=ctk.CTkFont(size=11), justify="left",
                          text_color=("#b91c1c", "#f87171"), wraplength=520,
@@ -559,6 +604,8 @@ class VisualizerFrame(ctk.CTkFrame):
         self.preview_lbl = ctk.CTkLabel(card, text="Drop an image to start the preview",
                                         text_color=MUTED, height=300)
         self.preview_lbl.pack(padx=14, pady=(0, 6))
+        self.preview_lbl.bind("<Button-1>", self._on_preview_drag)
+        self.preview_lbl.bind("<B1-Motion>", self._on_preview_drag)
 
         transport = ctk.CTkFrame(card, fg_color="transparent")
         transport.pack(fill="x", padx=14, pady=(0, 12))
@@ -706,6 +753,26 @@ class VisualizerFrame(ctk.CTkFrame):
         self.style_menu.set("Custom")
         CustomStyleDialog(self, self.custom_cfg, lambda: None)
 
+    def _reset_vis_pos(self):
+        self.vis_x.set(0)
+        self.vis_y.set(0)
+        self.vis_scale.set(100)
+
+    def _on_title_pos_menu(self, _value):
+        self.title_custom = None  # preset chosen -> stop free positioning
+
+    def _on_preview_drag(self, event):
+        """Drag the title anywhere on the live preview."""
+        if not self.title_var.get() or self._pv_disp_size is None:
+            return
+        pw, ph = self._pv_disp_size
+        lw = max(1, self.preview_lbl.winfo_width())
+        lh = max(1, self.preview_lbl.winfo_height())
+        fx = (event.x - (lw - pw) / 2) / pw
+        fy = (event.y - (lh - ph) / 2) / ph
+        self.title_custom = (min(0.98, max(0.02, fx)),
+                             min(0.97, max(0.03, fy)))
+
     # ---------------- subtitles ----------------
 
     def _generate_subs(self):
@@ -814,7 +881,13 @@ class VisualizerFrame(ctk.CTkFrame):
             "title_pos": self.title_pos_menu.get(),
             "title_scale": float(self.title_size.get()),
             "title_font": self.title_font_menu.get(),
+            "title_custom": self.title_custom,
             "sub_font": self.sub_font_menu.get(),
+            "sub_scale": float(self.sub_size.get()) / 100.0,
+            "sub_y": float(self.sub_pos.get()) / 100.0,
+            "vis_dx": float(self.vis_x.get()) / 100.0,
+            "vis_dy": float(self.vis_y.get()) / 100.0,
+            "vis_scale": float(self.vis_scale.get()) / 100.0,
             "show_subs": self.subs_var.get(),
             "subtitles": self.subtitles,
             "sub_style": self.sub_style_menu.get(),
@@ -896,6 +969,7 @@ class VisualizerFrame(ctk.CTkFrame):
 
         photo = ctk.CTkImage(light_image=frame, dark_image=frame, size=frame.size)
         self._pv_photo = photo
+        self._pv_disp_size = frame.size
         self.preview_lbl.configure(image=photo, text="")
 
     def _toggle_play(self):

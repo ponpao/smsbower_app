@@ -14,8 +14,11 @@ music-visualizer **MP4** — ready for YouTube, TikTok or Reels.
   Spectrum, Circular Wave, Pulse Rings, **Custom**
 - ⚙️ **Custom visualizer builder**: element (bars/dots/line), position,
   bar count, thickness, height, mirror, reflection, rounded caps
-- 🏷️ **Title controls**: your own text, 7 positions, size slider —
-  **full Khmer support** (mixed ខ្មែរ + English OK)
+- 🏷️ **Title controls**: your own text, 7 preset positions **or drag it
+  anywhere on the live preview**, size slider — full Khmer support
+  (mixed ខ្មែរ + English OK)
+- 🧲 **Move the visualizer anywhere**: Move X / Move Y / Scale sliders
+  relocate and resize any style (30%–170%)
 - 🔤 **9 bundled Khmer fonts** with pickers for title and captions:
   Noto Sans Khmer, Battambang, Moul, Koulen, Bokor, Dangrek, Suwannaphum,
   Preahvihear, Fasthand (all Google Fonts, SIL OFL license)
@@ -23,8 +26,9 @@ music-visualizer **MP4** — ready for YouTube, TikTok or Reels.
   speech/singing into timed text (speech-to-text); on first use the app
   offers to install its AI engine (faster-whisper) automatically. Pick the
   language (ខ្មែរ, English, …), tick *Show subtitles*, choose a caption
-  style (Box / Bold Outline / Neon Glow), fix words in the built-in SRT
-  editor, or import/export `.srt`
+  style (Box / Bold Outline / Neon Glow), caption **size** and **vertical
+  position** sliders, fix words/timing in the built-in SRT editor, or
+  import/export `.srt`
 - 📐 **CapCut-style ratios**: Original (match your image), 16:9, 9:16,
   1:1, 4:3, 3:4, 2:1, 1.85:1, 2.35:1, 5.8-inch, 720p — plus Custom…
   (type any width × height)
@@ -78,11 +82,11 @@ notebook.insert(3, frame, text="🎬 Visualizer")   # position 3 = Tab 4
 > `visualizer/fonts/` (SIL OFL license) — no Windows font setup needed.
 > Ship the `fonts/` folder together with the module.
 >
-> **Khmer looks scrambled (ជើង/ស្រៈ in wrong places)?** Your Pillow build
-> is missing the Raqm text-shaping engine (the app shows a red warning
-> when this happens). Fix it with:
-> `pip install --upgrade --force-reinstall pillow`
-> — the official Pillow wheels for Windows/macOS/Linux include Raqm.
+> **Khmer looks scrambled (ជើង/ស្រៈ in wrong places)?** The app ships its
+> own HarfBuzz text shaper (`uharfbuzz` + `freetype-py`, both in
+> requirements.txt) so Khmer renders correctly on **any** Pillow build.
+> If you see the red warning, install the two packages:
+> `pip install uharfbuzz freetype-py`
 
 ## PyInstaller packaging
 
