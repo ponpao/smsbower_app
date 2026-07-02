@@ -143,50 +143,92 @@ def analyze(audio_path, fps):
 
 
 # --------------------------------------------------------------------------
-# Fonts (Khmer-aware)
+# Fonts (Khmer-aware, selectable families)
 # --------------------------------------------------------------------------
 
 _KHMER_RE = re.compile(r"[ក-៿᧠-᧿]")
 _font_cache = {}
+
+# Bundled Khmer font families (all from Google Fonts, SIL OFL license).
+# Every family also covers basic Latin, so mixed ខ្មែរ + English text works.
+KHMER_FONTS = {
+    "Noto Sans Khmer": {"file": "NotoSansKhmer-VF.ttf", "vf": True},
+    "Battambang": {"file": "Battambang-Regular.ttf", "bold": "Battambang-Bold.ttf"},
+    "Moul (មូល)": {"file": "Moul-Regular.ttf"},
+    "Koulen (គូលែន)": {"file": "Koulen-Regular.ttf"},
+    "Bokor (បូកគោ)": {"file": "Bokor-Regular.ttf"},
+    "Dangrek (ដងរែក)": {"file": "Dangrek-Regular.ttf"},
+    "Suwannaphum": {"file": "Suwannaphum-Regular.ttf", "bold": "Suwannaphum-Bold.ttf"},
+    "Preahvihear (ព្រះវិហារ)": {"file": "Preahvihear-Regular.ttf"},
+    "Fasthand (អក្សរដៃ)": {"file": "Fasthand-Regular.ttf"},
+}
+KHMER_FONT_NAMES = list(KHMER_FONTS)
+DEFAULT_FONT = "Noto Sans Khmer"
 
 
 def text_has_khmer(text):
     return bool(_KHMER_RE.search(text or ""))
 
 
-def load_font(px, text="", bold=True):
-    """Pick a font that can actually draw `text` (Khmer + Latin included).
+def raqm_available():
+    """Raqm is Pillow's complex-script shaping engine. Without it Khmer
+    subscripts/vowels come out scrambled — the UI warns about this."""
+    try:
+        from PIL import features
+        return bool(features.check("raqm"))
+    except Exception:
+        return False
 
-    The bundled Noto Sans Khmer variable font covers Khmer AND basic Latin,
-    so mixed titles like "ចាប៉ីខ្មែរ - Khmer Song" render without tofu boxes.
-    """
-    khmer = text_has_khmer(text)
-    if khmer:
-        names = [
-            os.path.join(FONT_DIR, "NotoSansKhmer-VF.ttf"),
-            "khmerui.ttf", "khmeruib.ttf",       # Windows Khmer UI
-            "leelawui.ttf", "leelauib.ttf",      # Windows Leelawadee UI
-        ]
-    else:
-        names = [
-            "arialbd.ttf" if bold else "arial.ttf", "arial.ttf",
-            "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf", "DejaVuSans.ttf",
-            os.path.join(FONT_DIR, "NotoSansKhmer-VF.ttf"),
-        ]
-    for name in names:
-        key = (name, px, bold)
-        if key in _font_cache:
-            return _font_cache[key]
+
+def _try_font(name, px, bold, vf=False):
+    key = (name, px, bold)
+    if key in _font_cache:
+        return _font_cache[key]
+    try:
         try:
+            font = ImageFont.truetype(name, px, layout_engine=ImageFont.Layout.RAQM)
+        except Exception:
             font = ImageFont.truetype(name, px)
+        if vf:
             try:
                 font.set_variation_by_name("Bold" if bold else "Regular")
             except Exception:
-                pass  # not a variable font
-            _font_cache[key] = font
+                pass
+        _font_cache[key] = font
+        return font
+    except Exception:
+        return None
+
+
+def load_font(px, text="", bold=True, family=None):
+    """Pick a font that can draw `text` (Khmer + Latin), honoring the
+    user-selected Khmer `family` when given."""
+    if family in KHMER_FONTS:
+        spec = KHMER_FONTS[family]
+        fname = spec.get("bold") if (bold and spec.get("bold")) else spec["file"]
+        font = _try_font(os.path.join(FONT_DIR, fname), px, bold,
+                         vf=spec.get("vf", False))
+        if font is not None:
             return font
-        except Exception:
-            continue
+
+    khmer = text_has_khmer(text)
+    if khmer:
+        names = [
+            (os.path.join(FONT_DIR, "NotoSansKhmer-VF.ttf"), True),
+            ("khmerui.ttf", False), ("khmeruib.ttf", False),   # Windows Khmer UI
+            ("leelawui.ttf", False), ("leelauib.ttf", False),  # Leelawadee UI
+        ]
+    else:
+        names = [
+            ("arialbd.ttf" if bold else "arial.ttf", False), ("arial.ttf", False),
+            ("DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf", False),
+            ("DejaVuSans.ttf", False),
+            (os.path.join(FONT_DIR, "NotoSansKhmer-VF.ttf"), True),
+        ]
+    for name, vf in names:
+        font = _try_font(name, px, bold, vf)
+        if font is not None:
+            return font
     return ImageFont.load_default()
 
 
@@ -724,12 +766,12 @@ _TITLE_ANCHOR = {
 }
 
 
-def draw_title(frame, text, c1, position="Bottom Center", scale=1.0):
+def draw_title(frame, text, c1, position="Bottom Center", scale=1.0, family=None):
     if not text:
         return
     w, h = frame.size
     px = max(14, int(h * 0.038 * scale))
-    font = load_font(px, text)
+    font = load_font(px, text, family=family)
     draw = ImageDraw.Draw(frame, "RGBA")
     fx, fy, align = _TITLE_ANCHOR.get(position, _TITLE_ANCHOR["Bottom Center"])
     tw = draw.textlength(text, font=font)
@@ -746,12 +788,12 @@ def draw_title(frame, text, c1, position="Bottom Center", scale=1.0):
     )
 
 
-def draw_subtitle(frame, text, style, c1, c2):
+def draw_subtitle(frame, text, style, c1, c2, family=None):
     if not text:
         return
     w, h = frame.size
     px = max(15, int(h * 0.045))
-    font = load_font(px, text)
+    font = load_font(px, text, family=family)
     draw = ImageDraw.Draw(frame, "RGBA")
     lines = wrap_text(draw, text, font, int(w * 0.82))
     asc, desc = font.getmetrics()
@@ -860,13 +902,15 @@ def compose_frame(assets, i, opts):
     if opts.get("show_title") and opts.get("title_text"):
         draw_title(frame, opts["title_text"], c1,
                    opts.get("title_pos", "Bottom Center"),
-                   opts.get("title_scale", 1.0))
+                   opts.get("title_scale", 1.0),
+                   family=opts.get("title_font"))
 
     if opts.get("show_subs") and opts.get("subtitles"):
         t = i / an.fps
         text = find_subtitle(opts["subtitles"], t)
         if text:
-            draw_subtitle(frame, text, opts.get("sub_style", "CapCut Box"), c1, c2)
+            draw_subtitle(frame, text, opts.get("sub_style", "CapCut Box"), c1, c2,
+                          family=opts.get("sub_font"))
 
     if opts.get("progress_bar"):
         draw_progress(frame, i / max(1, an.num_frames - 1), c1, c2)

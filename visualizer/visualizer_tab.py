@@ -374,20 +374,27 @@ class VisualizerFrame(ctk.CTkFrame):
         self.title_entry.pack(fill="x", padx=14)
         trow = ctk.CTkFrame(card, fg_color="transparent")
         trow.pack(fill="x", padx=14, pady=(6, 2))
-        trow.grid_columnconfigure((0, 1), weight=1)
-        ctk.CTkLabel(trow, text="Position", font=ctk.CTkFont(size=11, weight="bold")
+        trow.grid_columnconfigure((0, 1, 2), weight=1)
+        ctk.CTkLabel(trow, text="Font ខ្មែរ", font=ctk.CTkFont(size=11, weight="bold")
                      ).grid(row=0, column=0, sticky="w")
+        self.title_font_menu = ctk.CTkOptionMenu(
+            trow, values=engine.KHMER_FONT_NAMES, fg_color=ACCENT,
+            button_color=ACCENT_HOVER, button_hover_color=ACCENT_HOVER)
+        self.title_font_menu.set(engine.DEFAULT_FONT)
+        self.title_font_menu.grid(row=1, column=0, sticky="ew", padx=(0, 8))
+        ctk.CTkLabel(trow, text="Position", font=ctk.CTkFont(size=11, weight="bold")
+                     ).grid(row=0, column=1, sticky="w")
         self.title_pos_menu = ctk.CTkOptionMenu(
             trow, values=engine.TITLE_POSITIONS, fg_color=ACCENT,
             button_color=ACCENT_HOVER, button_hover_color=ACCENT_HOVER)
         self.title_pos_menu.set("Bottom Center")
-        self.title_pos_menu.grid(row=1, column=0, sticky="ew", padx=(0, 8))
+        self.title_pos_menu.grid(row=1, column=1, sticky="ew", padx=(0, 8))
         ctk.CTkLabel(trow, text="Size", font=ctk.CTkFont(size=11, weight="bold")
-                     ).grid(row=0, column=1, sticky="w")
+                     ).grid(row=0, column=2, sticky="w")
         self.title_size = ctk.CTkSlider(trow, from_=0.5, to=2.5,
                                         progress_color=ACCENT, button_color=ACCENT)
         self.title_size.set(1.0)
-        self.title_size.grid(row=1, column=1, sticky="ew", pady=(8, 0))
+        self.title_size.grid(row=1, column=2, sticky="ew", pady=(8, 0))
         ctk.CTkFrame(card, fg_color="transparent", height=8).pack()
 
         # ---- subtitles card ----
@@ -401,6 +408,14 @@ class VisualizerFrame(ctk.CTkFrame):
         srow = ctk.CTkFrame(card, fg_color="transparent")
         srow.pack(fill="x", padx=14)
         srow.grid_columnconfigure((0, 1, 2), weight=1)
+        ctk.CTkLabel(srow, text="Caption font ខ្មែរ",
+                     font=ctk.CTkFont(size=11, weight="bold")
+                     ).grid(row=2, column=0, sticky="w", pady=(6, 0))
+        self.sub_font_menu = ctk.CTkOptionMenu(
+            srow, values=engine.KHMER_FONT_NAMES, fg_color=ACCENT,
+            button_color=ACCENT_HOVER, button_hover_color=ACCENT_HOVER)
+        self.sub_font_menu.set(engine.DEFAULT_FONT)
+        self.sub_font_menu.grid(row=3, column=0, sticky="ew", padx=(0, 6))
         ctk.CTkLabel(srow, text="Language", font=ctk.CTkFont(size=11, weight="bold")
                      ).grid(row=0, column=0, sticky="w")
         self.lang_menu = ctk.CTkOptionMenu(srow, values=list(LANGUAGES),
@@ -473,6 +488,15 @@ class VisualizerFrame(ctk.CTkFrame):
             ctk.CTkLabel(left, text="ℹ️ Drag & drop needs 'pip install tkinterdnd2' — click a card to browse.",
                          font=ctk.CTkFont(size=11),
                          text_color=("#9a6700", "#d4a72c")).pack(anchor="w", pady=(6, 0))
+        if not engine.raqm_available():
+            ctk.CTkLabel(
+                left,
+                text=("⚠️ អក្សរខ្មែរនឹងរាយមិនត្រឹមត្រូវ (ជើង/ស្រៈខុសកន្លែង) — Pillow "
+                      "របស់អ្នកខ្វះ Raqm text shaping.\n"
+                      "ដំណោះស្រាយ:  pip install --upgrade --force-reinstall pillow"),
+                font=ctk.CTkFont(size=11), justify="left",
+                text_color=("#b91c1c", "#f87171"), wraplength=520,
+            ).pack(anchor="w", pady=(6, 0))
 
     def _build_right(self, right):
         card = ctk.CTkFrame(right, corner_radius=16, fg_color=CARD,
@@ -697,6 +721,8 @@ class VisualizerFrame(ctk.CTkFrame):
             "title_text": self.title_entry.get().strip(),
             "title_pos": self.title_pos_menu.get(),
             "title_scale": float(self.title_size.get()),
+            "title_font": self.title_font_menu.get(),
+            "sub_font": self.sub_font_menu.get(),
             "show_subs": self.subs_var.get(),
             "subtitles": self.subtitles,
             "sub_style": self.sub_style_menu.get(),

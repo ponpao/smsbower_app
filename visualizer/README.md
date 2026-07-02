@@ -15,7 +15,10 @@ music-visualizer **MP4** — ready for YouTube, TikTok or Reels.
 - ⚙️ **Custom visualizer builder**: element (bars/dots/line), position,
   bar count, thickness, height, mirror, reflection, rounded caps
 - 🏷️ **Title controls**: your own text, 7 positions, size slider —
-  **full Khmer support** (bundled Noto Sans Khmer, mixed ខ្មែរ + English OK)
+  **full Khmer support** (mixed ខ្មែរ + English OK)
+- 🔤 **9 bundled Khmer fonts** with pickers for title and captions:
+  Noto Sans Khmer, Battambang, Moul, Koulen, Bokor, Dangrek, Suwannaphum,
+  Preahvihear, Fasthand (all Google Fonts, SIL OFL license)
 - 💬 **AI subtitles (speech-to-text)** via faster-whisper — pick the
   language (ខ្មែរ, English, …), generate, tick *Show subtitles*, and get
   CapCut-style captions (Box / Bold Outline / Neon Glow). Edit in the
@@ -66,9 +69,15 @@ notebook.insert(3, frame, text="🎬 Visualizer")   # position 3 = Tab 4
 > (`enable_dnd(app)`). Without it the drop cards fall back to
 > click-to-browse.
 >
-> **Khmer text:** titles and subtitles use the bundled
-> `fonts/NotoSansKhmer-VF.ttf` (SIL OFL license) — no Windows font setup
-> needed. Ship the `fonts/` folder together with the module.
+> **Khmer text:** titles and subtitles use the bundled fonts in
+> `visualizer/fonts/` (SIL OFL license) — no Windows font setup needed.
+> Ship the `fonts/` folder together with the module.
+>
+> **Khmer looks scrambled (ជើង/ស្រៈ in wrong places)?** Your Pillow build
+> is missing the Raqm text-shaping engine (the app shows a red warning
+> when this happens). Fix it with:
+> `pip install --upgrade --force-reinstall pillow`
+> — the official Pillow wheels for Windows/macOS/Linux include Raqm.
 
 ## PyInstaller packaging
 
