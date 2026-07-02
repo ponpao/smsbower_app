@@ -19,6 +19,7 @@ import os
 import re
 import subprocess
 import sys
+import traceback
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -239,8 +240,16 @@ def khmer_shaping_mode():
                  font load in _try_font)
     "none"     — neither available: ជើង/ស្រៈ would render scrambled
     """
-    if khmer_shaper_available() and resolve_khmer_font_path()[0]:
-        return "harfbuzz"
+    if khmer_shaper_available():
+        path, vf = resolve_khmer_font_path()
+        if path:
+            try:
+                _HBFont.get(path, 24, True, vf)   # real init, not just import
+                return "harfbuzz"
+            except Exception:
+                print("[visualizer] HarfBuzz shaper init failed:",
+                      file=sys.stderr)
+                traceback.print_exc()
     if raqm_available():
         return "raqm"
     return "none"
@@ -317,6 +326,30 @@ def resolve_khmer_font_path(family=None, bold=True):
     return None, False
 
 
+def _force_buffer(buf, *, script, direction, language):
+    """Set script/direction/language on a HarfBuzz buffer, tolerant of the
+    binding's API: uharfbuzz uses properties, some builds expose setter
+    methods. Any leftover fields are filled by guess_segment_properties()."""
+    for attr, value, setter in (
+        ("script", script, "set_script"),
+        ("direction", direction, "set_direction"),
+        ("language", language, "set_language"),
+    ):
+        try:
+            method = getattr(buf, setter, None)
+            if callable(method):
+                method(value)
+            else:
+                setattr(buf, attr, value)
+        except Exception:
+            pass
+    # backfill anything the binding left unset (e.g. clusters/flags)
+    try:
+        buf.guess_segment_properties()
+    except Exception:
+        pass
+
+
 class _HBFont:
     """HarfBuzz shaping + FreeType rasterizing for one (font, px, bold).
 
@@ -346,15 +379,38 @@ class _HBFont:
                 self.ft.set_var_design_coords((100.0, 700.0))  # wdth, wght
             except Exception:
                 pass
-        self.ascent = self.ft.size.ascender / 64.0
-        self.descent = -self.ft.size.descender / 64.0
+        self.ascent, self.descent = self._scaled_metrics(px)
         self._mask_cache = {}
+
+    def _scaled_metrics(self, px):
+        """Pixel ascent/descent, robust across freetype-py versions.
+
+        freetype-py's Face.size returns SizeMetrics directly (has
+        .ascender); other bindings expose it as .size.metrics.ascender.
+        Last resort: scale the face's font-unit metrics ourselves.
+        """
+        size = self.ft.size
+        for obj in (size, getattr(size, "metrics", None)):
+            if obj is None:
+                continue
+            try:
+                return obj.ascender / 64.0, -obj.descender / 64.0
+            except AttributeError:
+                continue
+        upem = self.ft.units_per_EM or 1000
+        return (px * self.ft.ascender / upem, -px * self.ft.descender / upem)
 
     def shape(self, text):
         import uharfbuzz as hb
         buf = hb.Buffer()
         buf.add_str(text)
-        buf.guess_segment_properties()
+        if text_has_khmer(text):
+            # Force Khmer shaping so ជើង (subscripts) and pre-base vowels are
+            # reordered correctly. guess_segment_properties() alone leaves the
+            # language at the machine locale, which can misfire on Windows.
+            _force_buffer(buf, script="Khmr", direction="ltr", language="km")
+        else:
+            buf.guess_segment_properties()
         hb.shape(self.hb_font, buf)
         glyphs, pen = [], 0.0
         for info, pos in zip(buf.glyph_infos, buf.glyph_positions):
@@ -415,6 +471,11 @@ class TextEngine:
                 try:
                     self.hb = _HBFont.get(path, px, bold, vf)
                 except Exception:
+                    # never silent: without HB, Khmer falls back to PIL and
+                    # may render scrambled — make the cause visible
+                    print("[visualizer] HarfBuzz shaper init failed:",
+                          file=sys.stderr)
+                    traceback.print_exc()
                     self.hb = None
         if self.hb is not None:
             self.ascent, self.descent = self.hb.ascent, self.hb.descent

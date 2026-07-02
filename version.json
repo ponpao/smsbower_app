@@ -1,9 +1,10 @@
 {
-  "version": "3.5.1",
+  "version": "3.5.2",
   "release_date": "2026-07-02",
-  "download_url": "https://github.com/ponpao/smsbower_app/releases/download/V3.5.1/TRAVKOD.CODEs.3.5.1.exe",
+  "download_url": "https://github.com/ponpao/smsbower_app/releases/download/V3.5.2/TRAVKOD.CODEs.3.5.2.exe",
   "changelog": [
-    "Visualizer: បង្ហាញស្ថានភាព Khmer text shaping engine ក្នុង Tab Files (HarfBuzz/Raqm)",
-    "Visualizer: ប៊ូតុង 🛠 Fix អក្សរខ្មែរ — install shaper ដោយស្វ័យប្រវត្តិ ប្រើបានភ្លាមមិនចាំបាច់ restart"
+    "Visualizer: ជួសជុល HarfBuzz shaper — អាន font metrics បានគ្រប់ version របស់ freetype-py (ការពារ AttributeError លើ Windows)",
+    "Visualizer: បង្ខំ Khmer shaping (script=Khmr) អោយ ជើង/ស្រៈ ត្រឹមត្រូវ ដោយមិនអាស្រ័យ locale",
+    "Visualizer: បើ HarfBuzz init បរាជ័យ បង្ហាញ error ក្នុង log (លែងស្ងាត់)"
   ]
 }
