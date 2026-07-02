@@ -86,10 +86,17 @@ notebook.insert(3, frame, text="🎬 Visualizer")   # position 3 = Tab 4
 > `visualizer/fonts/` (SIL OFL license) — no Windows font setup needed.
 > Ship the `fonts/` folder together with the module.
 >
-> **Khmer looks scrambled (ជើង/ស្រៈ in wrong places)?** The app ships its
-> own HarfBuzz text shaper (`uharfbuzz` + `freetype-py`, both in
-> requirements.txt) so Khmer renders correctly on **any** Pillow build.
-> If you see the red warning, install the two packages:
+> **Khmer looks scrambled (ជើង/ស្រៈ in wrong places)?** Khmer needs a
+> complex-text shaping engine. The app tries, in order:
+> 1. **HarfBuzz** — its own shaper (`uharfbuzz` + `freetype-py`), works on
+>    any Pillow build (same shaping tech as skia/Chrome, ~2 MB);
+> 2. **Pillow Raqm** — every font is loaded with
+>    `layout_engine=ImageFont.Layout.RAQM` when Pillow has it.
+>
+> The Files page shows which engine is active
+> (✅ Khmer text shaping: HarfBuzz). If neither is available it shows a
+> red warning with a **🛠 Fix now** button that auto-installs the shaper —
+> effective immediately, no restart. Manual fix:
 > `pip install uharfbuzz freetype-py`
 
 ## PyInstaller packaging

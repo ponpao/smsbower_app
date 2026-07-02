@@ -482,20 +482,23 @@ class VisualizerFrame(ctk.CTkFrame):
                          font=ctk.CTkFont(size=11), wraplength=400, justify="left",
                          text_color=("#9a6700", "#d4a72c")).pack(anchor="w", padx=6,
                                                                  pady=(4, 0))
-        ks = engine.khmer_support()
-        problems = []
-        if not ks["fonts_ok"]:
-            problems.append(
-                "⚠️ រកមិនឃើញ folder 'visualizer/fonts/' — Khmer fonts បាត់! "
-                "ត្រូវ copy folder fonts ជាមួយកម្មវិធីផង។")
-        if not ks["raqm_ok"] and not ks["hb_ok"]:
-            problems.append(
-                "⚠️ អក្សរខ្មែរនឹងរាយខុស (ជើង/ស្រៈខុសកន្លែង) — ដំណោះស្រាយ (មួយជួរគត់):\n"
-                "pip install uharfbuzz freetype-py")
-        for msg in problems:
-            ctk.CTkLabel(page, text=msg, font=ctk.CTkFont(size=11), justify="left",
+        if not engine.khmer_support()["fonts_ok"]:
+            ctk.CTkLabel(page,
+                         text="⚠️ រកមិនឃើញ folder 'visualizer/fonts/' — Khmer fonts បាត់! "
+                              "ត្រូវ copy folder fonts ជាមួយកម្មវិធីផង។",
+                         font=ctk.CTkFont(size=11), justify="left",
                          text_color=("#b91c1c", "#f87171"), wraplength=400,
                          ).pack(anchor="w", padx=6, pady=(6, 0))
+
+        self.khmer_status_lbl = ctk.CTkLabel(page, text="",
+                                             font=ctk.CTkFont(size=11),
+                                             justify="left", wraplength=400)
+        self.khmer_status_lbl.pack(anchor="w", padx=6, pady=(6, 0))
+        self.fix_khmer_btn = ctk.CTkButton(
+            page, text="🛠 Fix អក្សរខ្មែរឥឡូវនេះ (auto install)", height=32,
+            fg_color=("#dc2626", "#b91c1c"), hover_color=("#b91c1c", "#991b1b"),
+            command=self._fix_khmer)
+        self._refresh_khmer_status()
 
     # ---- page: style ----
 
@@ -764,6 +767,45 @@ class VisualizerFrame(ctk.CTkFrame):
     def _open_custom(self):
         self.style_menu.set("Custom")
         CustomStyleDialog(self, self.custom_cfg, lambda: None)
+
+    def _refresh_khmer_status(self):
+        mode = engine.khmer_shaping_mode()
+        if mode == "none":
+            self.khmer_status_lbl.configure(
+                text="⚠️ អក្សរខ្មែរនឹងរាយខុស (ជើង/ស្រៈខុសកន្លែង) — ចុចប៊ូតុងខាងក្រោម "
+                     "ដើម្បីដោះស្រាយភ្លាមៗ (មិនចាំបាច់ restart)",
+                text_color=("#b91c1c", "#f87171"))
+            self.fix_khmer_btn.pack(fill="x", padx=6, pady=(4, 6))
+        else:
+            engine_name = "HarfBuzz" if mode == "harfbuzz" else "Pillow Raqm"
+            self.khmer_status_lbl.configure(
+                text=f"✅ Khmer text shaping: {engine_name} — អក្សរខ្មែរត្រឹមត្រូវ (ជើង/ស្រៈ)",
+                text_color=("#047857", "#34d399"))
+            self.fix_khmer_btn.pack_forget()
+
+    def _fix_khmer(self):
+        self.fix_khmer_btn.configure(state="disabled", text="🛠 Installing…")
+
+        def worker():
+            try:
+                engine.install_khmer_shaper(
+                    progress_cb=lambda m: self.after(0, self._status, m))
+                self.after(0, self._on_khmer_fixed, None)
+            except Exception as exc:
+                self.after(0, self._on_khmer_fixed, str(exc))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_khmer_fixed(self, error):
+        self.fix_khmer_btn.configure(state="normal",
+                                     text="🛠 Fix អក្សរខ្មែរឥឡូវនេះ (auto install)")
+        if error:
+            self._status("Khmer fix failed.")
+            messagebox.showwarning("Fix Khmer", error)
+        else:
+            self._status("✅ Khmer shaper installed — អក្សរខ្មែរត្រឹមត្រូវហើយ!")
+            self._pv_key = None  # redraw preview with the new shaper
+        self._refresh_khmer_status()
 
     def _reset_vis_pos(self):
         self.vis_x.set(0)

@@ -231,6 +231,21 @@ def khmer_support():
     }
 
 
+def khmer_shaping_mode():
+    """Which engine will shape Khmer text right now.
+
+    "harfbuzz" — our bundled uharfbuzz+freetype renderer (best, any Pillow)
+    "raqm"     — Pillow built with Raqm (Layout.RAQM is requested on every
+                 font load in _try_font)
+    "none"     — neither available: ជើង/ស្រៈ would render scrambled
+    """
+    if khmer_shaper_available() and resolve_khmer_font_path()[0]:
+        return "harfbuzz"
+    if raqm_available():
+        return "raqm"
+    return "none"
+
+
 def _try_font(name, px, bold, vf=False):
     key = (name, px, bold)
     if key in _font_cache:
@@ -511,23 +526,32 @@ def whisper_available():
         return False
 
 
-def install_whisper(progress_cb=None):
-    """Install faster-whisper with pip (Auto Captions one-click setup)."""
+def _pip_install(packages, progress_cb=None, what="packages"):
     if getattr(sys, "frozen", False):
         raise RuntimeError(
             "This packaged build has no pip. Ask the app developer to "
-            "bundle faster-whisper, or use 'Import SRT' instead."
+            "bundle: " + " ".join(packages)
         )
-    cmd = [sys.executable, "-m", "pip", "install", "faster-whisper"]
+    cmd = [sys.executable, "-m", "pip", "install", *packages]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             text=True, creationflags=_no_window())
     for line in proc.stdout:
         if progress_cb and line.strip():
-            progress_cb("Installing AI engine… " + line.strip()[:70])
+            progress_cb(f"Installing {what}… " + line.strip()[:70])
     if proc.wait() != 0:
         raise RuntimeError(
-            "Install failed. Run manually:\n    pip install faster-whisper"
+            "Install failed. Run manually:\n    pip install " + " ".join(packages)
         )
+
+
+def install_whisper(progress_cb=None):
+    """Install faster-whisper with pip (Auto Captions one-click setup)."""
+    _pip_install(["faster-whisper"], progress_cb, "AI engine")
+
+
+def install_khmer_shaper(progress_cb=None):
+    """Install the HarfBuzz Khmer shaper (one-click fix for broken ជើង)."""
+    _pip_install(["uharfbuzz", "freetype-py"], progress_cb, "Khmer shaper")
 
 
 def transcribe(audio_path, language=None, model_size="small", progress_cb=None):

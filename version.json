@@ -1,10 +1,9 @@
 {
-  "version": "3.5.0",
+  "version": "3.5.1",
   "release_date": "2026-07-02",
-  "download_url": "https://github.com/ponpao/smsbower_app/releases/download/V3.5.0/TRAVKOD.CODEs.3.5.0.exe",
+  "download_url": "https://github.com/ponpao/smsbower_app/releases/download/V3.5.1/TRAVKOD.CODEs.3.5.1.exe",
   "changelog": [
-    "Visualizer: UI ថ្មីទំនើប — Preview video នៅខាងលើ, Tab រៀបចំមុខងារ (Files/Style/Title/Subs/More) មិនរញ៉េរញ៉ៃ, ប៊ូតុង Create Video ជាប់ខាងក្រោម",
-    "Visualizer: ទំហំកម្មវិធីតូចស្អាត 450×840 ដូច app ទំនើបៗ",
-    "Visualizer: Preview លែងងងឹតពេល Fade in/out បើក (Fade មានតែក្នុង video export)"
+    "Visualizer: បង្ហាញស្ថានភាព Khmer text shaping engine ក្នុង Tab Files (HarfBuzz/Raqm)",
+    "Visualizer: ប៊ូតុង 🛠 Fix អក្សរខ្មែរ — install shaper ដោយស្វ័យប្រវត្តិ ប្រើបានភ្លាមមិនចាំបាច់ restart"
   ]
 }
