@@ -3,7 +3,7 @@ import type {
   QueueItem, Params, ExportSettings, MasterStrip, Preset, FileMeta,
 } from '@shared/types';
 import { api } from '@/lib/api';
-import { defaultParams, defaultExport } from '@/lib/defaults';
+import { defaultParams, defaultExport, defaultStrip } from '@/lib/defaults';
 
 let idCounter = 0;
 const nextId = () => `job_${Date.now()}_${idCounter++}`;
@@ -167,14 +167,16 @@ export const useStore = create<State>((set, get) => ({
 
   startExport: async () => {
     const s = get();
-    const items = s.queue.filter((q) => q.status !== 'Error' || true);
+    const items = s.queue;
     if (items.length === 0) return;
-    // If "Humanize & Master" is off, pass neutral params (analysis/format-only).
+    // When "Humanize & Master" is on, use the console params. When off, pass
+    // neutral params: no tonal/humanize processing, just optional LUFS
+    // normalize + the safety limiter + format conversion.
     const params = s.humanizeOn
       ? { ...s.params, lufs_target: s.exportSettings.lufs_target,
           autotune_enabled: s.exportSettings.autotune }
-      : { ...s.params, strip: { ...s.params.strip }, humanize: 0,
-          lufs_target: s.exportSettings.lufs_target };
+      : { ...defaultParams(), strip: { ...defaultStrip() },
+          humanize: 0, lufs_target: s.exportSettings.lufs_target };
 
     set((st) => ({
       exporting: true,
