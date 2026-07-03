@@ -14,12 +14,13 @@ preview and the final video export share the exact same pipeline:
 """
 
 import bisect
+import concurrent.futures
 import math
+import multiprocessing
 import os
 import re
 import subprocess
 import sys
-import traceback
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -116,17 +117,59 @@ def ffmpeg_exe():
         return "ffmpeg"
 
 
-def load_audio_mono(path):
-    cmd = [
-        ffmpeg_exe(), "-v", "error", "-i", path,
-        "-f", "f32le", "-ac", "1", "-ar", str(SAMPLE_RATE), "-",
-    ]
+def load_audio_mono(path_or_paths):
+    if isinstance(path_or_paths, (list, tuple)):
+        paths = path_or_paths
+    else:
+        paths = [path_or_paths]
+    
+    arrays = []
+    for path in paths:
+        cmd = [
+            ffmpeg_exe(), "-v", "error", "-i", path,
+            "-f", "f32le", "-ac", "1", "-ar", str(SAMPLE_RATE), "-",
+        ]
+        proc = subprocess.run(cmd, capture_output=True, creationflags=_no_window())
+        if proc.returncode != 0 or len(proc.stdout) < 4:
+            raise RuntimeError(
+                f"Could not decode audio file '{path}':\n" + proc.stderr.decode(errors="replace")[-400:]
+            )
+        arr = np.frombuffer(proc.stdout, dtype=np.float32).copy()
+        arrays.append(arr)
+        
+    if not arrays:
+        raise RuntimeError("No audio paths provided.")
+    return np.concatenate(arrays)
+
+
+def get_audio_duration(path):
+    cmd = [ffmpeg_exe(), "-i", path]
     proc = subprocess.run(cmd, capture_output=True, creationflags=_no_window())
-    if proc.returncode != 0 or len(proc.stdout) < 4:
-        raise RuntimeError(
-            "Could not decode audio file:\n" + proc.stderr.decode(errors="replace")[-400:]
-        )
-    return np.frombuffer(proc.stdout, dtype=np.float32).copy()
+    stderr = proc.stderr.decode(errors="replace") if proc.stderr else ""
+    import re
+    m = re.search(r'Duration:\s*(\d+):(\d+):(\d+\.\d+)', stderr)
+    if m:
+        h = int(m.group(1))
+        m_val = int(m.group(2))
+        s = float(m.group(3))
+        return h * 3600 + m_val * 60 + s
+    # Fallback: decode and calculate
+    try:
+        arr = load_audio_mono(path)
+        return len(arr) / SAMPLE_RATE
+    except Exception:
+        return 0.0
+
+
+def build_track_timeline(audio_paths):
+    timeline = []
+    current_time = 0.0
+    for path in audio_paths:
+        dur = get_audio_duration(path)
+        title = os.path.splitext(os.path.basename(path))[0]
+        timeline.append((current_time, title))
+        current_time += dur
+    return timeline
 
 
 @dataclass
@@ -240,16 +283,8 @@ def khmer_shaping_mode():
                  font load in _try_font)
     "none"     — neither available: ជើង/ស្រៈ would render scrambled
     """
-    if khmer_shaper_available():
-        path, vf = resolve_khmer_font_path()
-        if path:
-            try:
-                _HBFont.get(path, 24, True, vf)   # real init, not just import
-                return "harfbuzz"
-            except Exception:
-                print("[visualizer] HarfBuzz shaper init failed:",
-                      file=sys.stderr)
-                traceback.print_exc()
+    if khmer_shaper_available() and resolve_khmer_font_path()[0]:
+        return "harfbuzz"
     if raqm_available():
         return "raqm"
     return "none"
@@ -261,7 +296,10 @@ def _try_font(name, px, bold, vf=False):
         return _font_cache[key]
     try:
         try:
-            font = ImageFont.truetype(name, px, layout_engine=ImageFont.Layout.RAQM)
+            if raqm_available():
+                font = ImageFont.truetype(name, px, layout_engine=ImageFont.Layout.RAQM)
+            else:
+                font = ImageFont.truetype(name, px)
         except Exception:
             font = ImageFont.truetype(name, px)
         if vf:
@@ -326,30 +364,6 @@ def resolve_khmer_font_path(family=None, bold=True):
     return None, False
 
 
-def _force_buffer(buf, *, script, direction, language):
-    """Set script/direction/language on a HarfBuzz buffer, tolerant of the
-    binding's API: uharfbuzz uses properties, some builds expose setter
-    methods. Any leftover fields are filled by guess_segment_properties()."""
-    for attr, value, setter in (
-        ("script", script, "set_script"),
-        ("direction", direction, "set_direction"),
-        ("language", language, "set_language"),
-    ):
-        try:
-            method = getattr(buf, setter, None)
-            if callable(method):
-                method(value)
-            else:
-                setattr(buf, attr, value)
-        except Exception:
-            pass
-    # backfill anything the binding left unset (e.g. clusters/flags)
-    try:
-        buf.guess_segment_properties()
-    except Exception:
-        pass
-
-
 class _HBFont:
     """HarfBuzz shaping + FreeType rasterizing for one (font, px, bold).
 
@@ -379,38 +393,28 @@ class _HBFont:
                 self.ft.set_var_design_coords((100.0, 700.0))  # wdth, wght
             except Exception:
                 pass
-        self.ascent, self.descent = self._scaled_metrics(px)
+        try:
+            self.ascent = self.ft.size.metrics.ascender / 64.0
+            self.descent = -self.ft.size.metrics.descender / 64.0
+        except AttributeError:
+            self.ascent = self.ft.size.ascender / 64.0
+            self.descent = -self.ft.size.descender / 64.0
         self._mask_cache = {}
-
-    def _scaled_metrics(self, px):
-        """Pixel ascent/descent, robust across freetype-py versions.
-
-        freetype-py's Face.size returns SizeMetrics directly (has
-        .ascender); other bindings expose it as .size.metrics.ascender.
-        Last resort: scale the face's font-unit metrics ourselves.
-        """
-        size = self.ft.size
-        for obj in (size, getattr(size, "metrics", None)):
-            if obj is None:
-                continue
-            try:
-                return obj.ascender / 64.0, -obj.descender / 64.0
-            except AttributeError:
-                continue
-        upem = self.ft.units_per_EM or 1000
-        return (px * self.ft.ascender / upem, -px * self.ft.descender / upem)
 
     def shape(self, text):
         import uharfbuzz as hb
         buf = hb.Buffer()
         buf.add_str(text)
-        if text_has_khmer(text):
-            # Force Khmer shaping so ជើង (subscripts) and pre-base vowels are
-            # reordered correctly. guess_segment_properties() alone leaves the
-            # language at the machine locale, which can misfire on Windows.
-            _force_buffer(buf, script="Khmr", direction="ltr", language="km")
-        else:
-            buf.guess_segment_properties()
+        buf.guess_segment_properties()
+        if any(3968 <= ord(c) <= 4095 for c in text) or text_has_khmer(text):
+            try:
+                buf.set_script('Khmr')
+                buf.set_direction('ltr')
+                buf.set_language('km')
+            except AttributeError:
+                buf.script = 'Khmr'
+                buf.direction = 'ltr'
+                buf.language = 'km'
         hb.shape(self.hb_font, buf)
         glyphs, pen = [], 0.0
         for info, pos in zip(buf.glyph_infos, buf.glyph_positions):
@@ -470,11 +474,9 @@ class TextEngine:
             if path:
                 try:
                     self.hb = _HBFont.get(path, px, bold, vf)
-                except Exception:
-                    # never silent: without HB, Khmer falls back to PIL and
-                    # may render scrambled — make the cause visible
-                    print("[visualizer] HarfBuzz shaper init failed:",
-                          file=sys.stderr)
+                except Exception as exc:
+                    import traceback
+                    print('--- HarfBuzz Font Error ---')
                     traceback.print_exc()
                     self.hb = None
         if self.hb is not None:
@@ -595,7 +597,7 @@ def _pip_install(packages, progress_cb=None, what="packages"):
         )
     cmd = [sys.executable, "-m", "pip", "install", *packages]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            text=True, creationflags=_no_window())
+                            encoding="utf-8", errors="replace", creationflags=_no_window())
     for line in proc.stdout:
         if progress_cb and line.strip():
             progress_cb(f"Installing {what}… " + line.strip()[:70])
@@ -1085,7 +1087,7 @@ _TITLE_ANCHOR = {
 
 
 def draw_title(frame, text, c1, position="Bottom Center", scale=1.0, family=None,
-               custom=None):
+               custom=None, offset_x=0, alpha=255):
     """`custom` = (fx, fy) fractional center — lets the user drag the title
     anywhere on the preview; when set it overrides `position`."""
     if not text:
@@ -1093,7 +1095,6 @@ def draw_title(frame, text, c1, position="Bottom Center", scale=1.0, family=None
     w, h = frame.size
     px = max(14, int(h * 0.038 * scale))
     te = TextEngine(px, text, family)
-    draw = ImageDraw.Draw(frame, "RGBA")
     tw = te.width(text)
     asc, desc = te.ascent, te.descent
     if custom:
@@ -1105,13 +1106,8 @@ def draw_title(frame, text, c1, position="Bottom Center", scale=1.0, family=None
         x = int(w * fx - (tw if align == "rs" else tw / 2 if align == "ms" else 0))
         y = int(h * fy - (asc + desc) / 2 + asc) if fy == 0.5 else \
             int(h * fy + asc) if fy < 0.5 else int(h * fy)
-    te.draw(frame, (x + 2, y + 2), text, (0, 0, 0, 160))
-    te.draw(frame, (x, y), text, (245, 245, 245, 235))
-    pad = int(px * 0.45)
-    draw.rounded_rectangle(
-        (x - pad, y - asc - pad // 2, x + tw + pad, y + desc + pad // 2),
-        radius=max(6, px // 4), outline=c1 + (120,), width=max(2, px // 18),
-    )
+    te.draw(frame, (x + offset_x + 2, y + 2), text, (0, 0, 0, int(160 * alpha / 255)))
+    te.draw(frame, (x + offset_x, y), text, (245, 245, 245, int(235 * alpha / 255)))
 
 
 def draw_subtitle(frame, text, style, c1, c2, family=None, scale=1.0, y_frac=0.80):
@@ -1213,6 +1209,235 @@ def prepare_assets(image_path, an, size, opts):
     return FrameAssets(an, bg, size, beat_zoom, art, wm)
 
 
+# --------------------------------------------------------------------------
+# Album Song Mode Helpers
+# --------------------------------------------------------------------------
+
+def parse_tracklist(raw_text):
+    """
+    Parse a YouTube-style tracklist.
+    Example: 00:00 1. Song One\n03:15 2. Song Two
+    Returns a sorted list of (seconds, title) tuples.
+    """
+    import re
+    tracks = []
+    # Match pattern: (H:)?M:S or (H:M:S)
+    pattern = re.compile(r'(?:(\d+):)?(\d+):(\d+)')
+    for line in (raw_text or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        m = pattern.search(line)
+        if m:
+            h = int(m.group(1)) if m.group(1) else 0
+            m_val = int(m.group(2))
+            s = int(m.group(3))
+            seconds = h * 3600 + m_val * 60 + s
+            # Extract title: remove the matched timestamp from the line
+            start_idx, end_idx = m.span()
+            title = (line[:start_idx] + " " + line[end_idx:]).strip()
+            # Clean up title (remove double spaces, leading dashes, dots, etc.)
+            title = re.sub(r'^\s*[-–—:|.]\s*', '', title).strip()
+            if not title:
+                title = f"Track {len(tracks) + 1}"
+            tracks.append((seconds, title))
+    tracks.sort(key=lambda x: x[0])
+    return tracks
+
+
+def get_active_track(tracks, current_time):
+    """
+    Finds the active track index, title, start time, and elapsed time since it triggered.
+    """
+    if not tracks:
+        return None, None, None, 0.0
+    active_idx = -1
+    for idx, (sec, title) in enumerate(tracks):
+        if sec <= current_time:
+            active_idx = idx
+        else:
+            break
+    if active_idx == -1:
+        active_idx = 0
+    sec, title = tracks[active_idx]
+    return active_idx, title, sec, current_time - sec
+
+
+def draw_album_styles(frame, title, idx, all_tracks, style_name, elapsed_time, opts):
+    """
+    Dynamic track graphics router for all 10 selection variants.
+    """
+    c1, c2 = THEMES.get(opts.get("theme", "Neon Purple"), THEMES["Neon Purple"])
+    scale = float(opts.get("title_scale", 1.0))
+    family = opts.get("title_font")
+    px = max(14, int(frame.height * 0.038 * scale))
+    te = TextEngine(px, title, family)
+    tw = te.width(title)
+    asc, desc = te.ascent, te.descent
+    w, h = frame.size
+    draw = ImageDraw.Draw(frame, "RGBA")
+
+    # 1. Kinetic Slide-In
+    if "1. Kinetic Slide-In" in style_name:
+        offset_x = 0
+        alpha = 255
+        if 0 <= elapsed_time <= 2.5:
+            p = elapsed_time / 2.5
+            ease_out_exp = 1 - 2**(-10 * p)
+            offset_x = int(-80 * (1.0 - ease_out_exp))
+            alpha = int(255 * p)
+        draw_title(frame, title, c1, position=opts.get("title_pos", "Bottom Center"),
+                   scale=scale, family=family, custom=opts.get("title_custom"),
+                   offset_x=offset_x, alpha=alpha)
+
+    # 2. Side Playlist Panel
+    elif "2. Side Playlist Panel" in style_name:
+        panel_w = int(w * 0.28)
+        draw.rectangle((w - panel_w, 0, w, h), fill=(12, 12, 20, 160))
+        draw.line((w - panel_w, 0, w - panel_w, h), fill=c1 + (180,), width=2)
+        
+        head_px = max(12, int(h * 0.024))
+        te_head = TextEngine(head_px, "TRACKLIST", family)
+        te_head.draw(frame, (w - panel_w + 14, 28), "TRACKLIST", c1 + (255,))
+        
+        track_px = max(10, int(h * 0.018))
+        y_offset = 64
+        for t_idx, (sec, t_title) in enumerate(all_tracks):
+            disp_title = t_title[:24] + "..." if len(t_title) > 26 else t_title
+            te_track = TextEngine(track_px, disp_title, family)
+            if t_idx == idx:
+                pad = max(4, track_px // 3)
+                tw_track = te_track.width(disp_title)
+                draw.rounded_rectangle((w - panel_w + 8, y_offset - te_track.ascent - pad, w - 8, y_offset + te_track.descent + pad), radius=6, fill=c1 + (80,))
+                te_track.draw(frame, (w - panel_w + 20, y_offset), disp_title, (255, 255, 255, 255))
+            else:
+                te_track.draw(frame, (w - panel_w + 20, y_offset), disp_title, (180, 180, 180, 120))
+            y_offset += int(track_px * 2.2)
+            if y_offset > h - 40:
+                break
+
+    # 3. Live Wave Indicator
+    elif "3. Live Wave Indicator" in style_name:
+        track_px = max(12, int(h * 0.022))
+        y_offset = int(h * 0.15)
+        for t_idx, (sec, t_title) in enumerate(all_tracks):
+            te_track = TextEngine(track_px, t_title, family)
+            tw_track = te_track.width(t_title)
+            x = 30
+            y = y_offset
+            if t_idx == idx:
+                te_track.draw(frame, (x, y), t_title, c1 + (255,))
+                bx = x + tw_track + 14
+                import math
+                for b_idx in range(4):
+                    bounce = math.sin(elapsed_time * 8.0 + b_idx * 1.5) * 0.5 + 0.5
+                    bar_h = int(track_px * 0.8 * bounce) + 2
+                    bar_w = max(2, track_px // 8)
+                    gap = max(2, track_px // 10)
+                    x0 = bx + b_idx * (bar_w + gap)
+                    draw.rounded_rectangle((x0, y - bar_h, x0 + bar_w, y), radius=bar_w // 2, fill=c2 + (235,))
+            else:
+                te_track.draw(frame, (x, y), t_title, (180, 180, 180, 120))
+            y_offset += int(track_px * 1.8)
+            if y_offset > h - 40:
+                break
+
+    # 4. Modern Ticker Bar
+    elif "4. Modern Ticker Bar" in style_name:
+        bar_h = int(px * 1.6)
+        draw.rectangle((0, h - bar_h, w, h), fill=(10, 10, 15, 180))
+        draw.line((0, h - bar_h, w, h - bar_h), fill=c1 + (180,), width=2)
+        m, s = divmod(int(elapsed_time), 60)
+        time_str = f"{m:02d}:{s:02d}"
+        text_info = f"NOW PLAYING: Track {idx+1}/{len(all_tracks)}  |  {title} ({time_str})"
+        te_info = TextEngine(int(px * 0.9), text_info, family)
+        te_info.draw(frame, (20, h - bar_h + int(px * 0.35)), text_info, (240, 240, 240, 235))
+
+    # 5. Neon Glow Label
+    elif "5. Neon Glow Label" in style_name:
+        cx, cy = opts.get("title_custom") if opts.get("title_custom") else (0.5, 0.86)
+        if not opts.get("title_custom"):
+            fx, fy, align = _TITLE_ANCHOR.get(opts.get("title_pos", "Bottom Center"), _TITLE_ANCHOR["Bottom Center"])
+            cx, cy = fx, fy
+        x = int(w * cx - tw / 2)
+        y = int(h * cy + (asc - desc) / 2)
+        for r in (5, 3, 1):
+            for dx, dy in [(-r, 0), (r, 0), (0, -r), (0, r), (-r, -r), (r, r), (-r, r), (r, -r)]:
+                te.draw(frame, (x + dx, y + dy), title, c2 + (40 // r,))
+        te.draw(frame, (x, y), title, (255, 255, 255, 255))
+
+    # 6. Cinematic Corner Stamp
+    elif "6. Cinematic Corner Stamp" in style_name:
+        stamp_w = int(px * 8.0)
+        stamp_h = int(px * 3.4)
+        sx, sy = 24, 24
+        draw.rectangle((sx, sy, sx + stamp_w, sy + stamp_h), fill=(0, 0, 0, 100), outline=(255, 255, 255, 100), width=1)
+        te_stamp1 = TextEngine(int(px * 0.8), f"TRACK {idx+1:02d}: {title[:16]}", family)
+        te_stamp1.draw(frame, (sx + 10, sy + int(px * 0.9)), f"TRACK {idx+1:02d}: {title[:16]}", (245, 245, 245, 220))
+        m, s = divmod(int(elapsed_time), 60)
+        te_stamp2 = TextEngine(int(px * 0.7), f"TIME: {m:02d}:{s:02d}", family)
+        te_stamp2.draw(frame, (sx + 10, sy + int(px * 1.9)), f"TIME: {m:02d}:{s:02d}", (200, 200, 200, 200))
+        if int(elapsed_time * 2) % 2 == 0:
+            draw.ellipse((sx + stamp_w - 20, sy + 10, sx + stamp_w - 10, sy + 20), fill=(220, 40, 40, 255))
+
+    # 7. Top Header Banner
+    elif "7. Top Header Banner" in style_name:
+        bar_h = int(px * 1.5)
+        draw.rectangle((0, 0, w, bar_h), fill=(10, 10, 15, 190))
+        draw.line((0, bar_h, w, bar_h), fill=c1 + (180,), width=2)
+        header_text = f"● NOW PLAYING: {title}  |  TRACK {idx+1} OF {len(all_tracks)}"
+        te_h = TextEngine(int(px * 0.85), header_text, family)
+        htw = te_h.width(header_text)
+        te_h.draw(frame, ((w - htw) // 2, int(px * 0.95)), header_text, (245, 245, 245, 235))
+
+    # 8. Minimalist Drop Shadow
+    elif "8. Minimalist Drop Shadow" in style_name:
+        cx, cy = opts.get("title_custom") if opts.get("title_custom") else (0.5, 0.86)
+        if not opts.get("title_custom"):
+            fx, fy, align = _TITLE_ANCHOR.get(opts.get("title_pos", "Bottom Center"), _TITLE_ANCHOR["Bottom Center"])
+            cx, cy = fx, fy
+        x = int(w * cx - tw / 2)
+        y = int(h * cy + (asc - desc) / 2)
+        te.draw(frame, (x + 4, y + 4), title, (0, 0, 0, 40))
+        te.draw(frame, (x + 3, y + 3), title, (0, 0, 0, 80))
+        te.draw(frame, (x + 2, y + 2), title, (0, 0, 0, 130))
+        te.draw(frame, (x + 1, y + 1), title, (0, 0, 0, 180))
+        te.draw(frame, (x, y), title, (255, 255, 255, 255))
+
+    # 9. Centered Focal Board
+    elif "9. Centered Focal Board" in style_name:
+        cx, cy = opts.get("title_custom") if opts.get("title_custom") else (0.5, 0.86)
+        if not opts.get("title_custom"):
+            fx, fy, align = _TITLE_ANCHOR.get(opts.get("title_pos", "Bottom Center"), _TITLE_ANCHOR["Bottom Center"])
+            cx, cy = fx, fy
+        pad_x = px * 1.5
+        pad_y = px * 0.6
+        bx0 = w * cx - tw / 2 - pad_x
+        by0 = h * cy - asc - pad_y
+        bx1 = w * cx + tw / 2 + pad_x
+        by1 = h * cy + desc + pad_y
+        draw.rounded_rectangle((bx0, by0, bx1, by1), radius=12, fill=(18, 18, 24, 185), outline=c1 + (150,), width=2)
+        te.draw(frame, (int(w * cx - tw / 2), int(h * cy + (asc - desc) / 2)), title, (245, 245, 245, 235))
+        sub_text = f"TRACK {idx+1:02d}"
+        te_sub = TextEngine(int(px * 0.55), sub_text, family)
+        stw = te_sub.width(sub_text)
+        te_sub.draw(frame, (int(w * cx - stw / 2), int(by0 + px * 0.5)), sub_text, c1 + (220,))
+
+    # 10. Compact Pill Capsule
+    else:
+        cx, cy = opts.get("title_custom") if opts.get("title_custom") else (0.5, 0.86)
+        if not opts.get("title_custom"):
+            fx, fy, align = _TITLE_ANCHOR.get(opts.get("title_pos", "Bottom Center"), _TITLE_ANCHOR["Bottom Center"])
+            cx, cy = fx, fy
+        pad = int(px * 0.6)
+        bx0 = w * cx - tw / 2 - pad
+        by0 = h * cy - asc - pad // 2
+        bx1 = w * cx + tw / 2 + pad
+        by1 = h * cy + desc + pad // 2
+        draw.rounded_rectangle((bx0, by0, bx1, by1), radius=max(12, px // 2), fill=(247, 245, 240, 240), outline=c1 + (160,), width=2)
+        te.draw(frame, (int(w * cx - tw / 2), int(h * cy + (asc - desc) / 2)), title, (17, 20, 24, 235))
+
+
 def compose_frame(assets, i, opts):
     an = assets.an
     c1, c2 = THEMES.get(opts.get("theme", "Neon Purple"), THEMES["Neon Purple"])
@@ -1243,12 +1468,41 @@ def compose_frame(assets, i, opts):
         draw_style(frame, style, an, i, c1, c2,
                    assets.center_art, opts.get("custom"))
 
-    if opts.get("show_title") and opts.get("title_text"):
-        draw_title(frame, opts["title_text"], c1,
-                   opts.get("title_pos", "Bottom Center"),
-                   opts.get("title_scale", 1.0),
-                   family=opts.get("title_font"),
-                   custom=opts.get("title_custom"))
+    t = i / an.fps
+    if opts.get("use_tracklist") and opts.get("audio_paths"):
+        tracks = opts.get("track_timeline")
+        if tracks is None:
+            tracks = opts.get("_track_timeline")
+        if tracks is None:
+            tracks = build_track_timeline(opts["audio_paths"])
+
+        if tracks:
+            idx, active_title, track_start, elapsed = get_active_track(tracks, t)
+            if active_title:
+                draw_album_styles(frame, active_title, idx, tracks,
+                                  opts.get("album_style", "1. Kinetic Slide-In"),
+                                  elapsed, opts)
+    elif opts.get("show_title"):
+        title_text = opts.get("title_text", "")
+        offset_x = 0
+        alpha = 255
+        transition_start = 0.0
+
+        if title_text:
+            elapsed = t - transition_start
+            if 0 <= elapsed <= 2.5:
+                p = elapsed / 2.5
+                ease_out_exp = 1 - 2**(-10 * p)
+                offset_x = int(-80 * (1.0 - ease_out_exp))
+                alpha = int(255 * p)
+
+            draw_title(frame, title_text, c1,
+                       opts.get("title_pos", "Bottom Center"),
+                       opts.get("title_scale", 1.0),
+                       family=opts.get("title_font"),
+                       custom=opts.get("title_custom"),
+                       offset_x=offset_x,
+                       alpha=alpha)
 
     if opts.get("show_subs") and opts.get("subtitles"):
         t = i / an.fps
@@ -1275,57 +1529,153 @@ def compose_frame(assets, i, opts):
 
 
 # --------------------------------------------------------------------------
+# Multi-Core CPU Rendering Workers
+# --------------------------------------------------------------------------
+
+_worker_assets = None
+_worker_opts = None
+
+
+def _init_worker(assets, opts):
+    global _worker_assets, _worker_opts
+    _worker_assets = assets
+    _worker_opts = opts
+
+
+def _draw_frame_worker(i):
+    global _worker_assets, _worker_opts
+    try:
+        frame = compose_frame(_worker_assets, i, _worker_opts)
+        return i, frame.tobytes()
+    except Exception as e:
+        return i, e
+
+
+# --------------------------------------------------------------------------
 # Export
 # --------------------------------------------------------------------------
 
 def render_video(image_path, audio_path, out_path, opts,
                  progress_cb=None, cancel_event=None):
+    audio_paths = list(audio_path) if isinstance(audio_path, (list, tuple)) else [audio_path]
+    if opts.get("use_tracklist") and audio_paths:
+        opts["_track_timeline"] = build_track_timeline(audio_paths)
+
     fps = int(opts.get("fps", 30))
     size = even_size(opts.get("size", (1920, 1080)))
     an = opts.get("_analysis")
     if an is None or an.fps != fps:
-        an = analyze(audio_path, fps)
+        an = analyze(audio_paths, fps)
     assets = prepare_assets(image_path, an, size, opts)
 
     w, h = size
-    cmd = [
-        ffmpeg_exe(), "-y", "-v", "error",
-        "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}",
-        "-r", str(fps), "-i", "-",
-        "-i", audio_path,
-        "-map", "0:v:0", "-map", "1:a:0",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "192k",
-    ]
-    if opts.get("fade"):
-        fade_out = max(0.0, an.duration - 1.0)
-        cmd += ["-af", f"afade=t=in:st=0:d=1,afade=t=out:st={fade_out:.2f}:d=1"]
-    cmd += ["-shortest", "-movflags", "+faststart", out_path]
+    v_codec = "libx264"
+    v_opts = ["-preset", "fast", "-crf", "18"]
 
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE,
-                            creationflags=_no_window())
-    try:
-        for i in range(an.num_frames):
-            if cancel_event is not None and cancel_event.is_set():
-                raise InterruptedError("cancelled")
-            frame = compose_frame(assets, i, opts)
-            proc.stdin.write(frame.tobytes())
-            if progress_cb and (i % 5 == 0 or i == an.num_frames - 1):
-                progress_cb(i + 1, an.num_frames)
-        proc.stdin.close()
-        err = proc.stderr.read().decode(errors="replace")
-        if proc.wait() != 0:
-            raise RuntimeError("ffmpeg encoding failed:\n" + err[-400:])
-    except BaseException:
+    if opts.get("use_gpu"):
         try:
-            proc.stdin.close()
+            res = subprocess.run([ffmpeg_exe(), "-encoders"], capture_output=True, creationflags=_no_window())
+            encoders_out = res.stdout.decode(errors="replace") if res.stdout else ""
+            if "h264_nvenc" in encoders_out:
+                v_codec = "h264_nvenc"
+                v_opts = ["-preset", "fast", "-b:v", "12M"]
+            elif "h264_amf" in encoders_out:
+                v_codec = "h264_amf"
+                v_opts = ["-b:v", "12M"]
+            elif "h264_qsv" in encoders_out:
+                v_codec = "h264_qsv"
+                v_opts = ["-b:v", "12M"]
         except Exception:
             pass
-        proc.kill()
-        proc.wait()
-        if os.path.exists(out_path):
+
+    temp_concat_file = None
+    try:
+        if len(audio_paths) > 1:
+            import tempfile
+            fd, temp_path = tempfile.mkstemp(suffix=".txt", prefix="ffmpeg_concat_")
+            temp_concat_file = temp_path
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                for p in audio_paths:
+                    safe_p = os.path.abspath(p).replace("\\", "/")
+                    f.write(f"file '{safe_p}'\n")
+
+        cmd = [
+            ffmpeg_exe(), "-y", "-v", "error",
+            "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}",
+            "-r", str(fps), "-i", "-",
+        ]
+        if temp_concat_file:
+            cmd += ["-f", "concat", "-safe", "0", "-i", temp_concat_file]
+        else:
+            cmd += ["-i", audio_paths[0]]
+
+        cmd += [
+            "-map", "0:v:0", "-map", "1:a:0",
+            "-c:v", v_codec,
+        ] + v_opts + [
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "192k",
+        ]
+        if opts.get("fade"):
+            fade_out = max(0.0, an.duration - 1.0)
+            cmd += ["-af", f"afade=t=in:st=0:d=1,afade=t=out:st={fade_out:.2f}:d=1"]
+        cmd += ["-shortest", "-movflags", "+faststart", out_path]
+
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE,
+                                creationflags=_no_window())
+        
+        # Start a thread to read stderr to prevent deadlock
+        import threading
+        ffmpeg_stderr_lines = []
+        def log_ffmpeg_stderr():
             try:
-                os.remove(out_path)
-            except OSError:
+                for line in proc.stderr:
+                    ffmpeg_stderr_lines.append(line)
+            except Exception:
                 pass
-        raise
+        ffmpeg_stderr_thread = threading.Thread(target=log_ffmpeg_stderr, daemon=True)
+        ffmpeg_stderr_thread.start()
+
+        try:
+            num_workers = min(61, max(1, multiprocessing.cpu_count() or 4))
+            chunksize = max(1, an.num_frames // (num_workers * 4))
+
+            with concurrent.futures.ProcessPoolExecutor(
+                max_workers=num_workers,
+                initializer=_init_worker,
+                initargs=(assets, opts)
+            ) as executor:
+                results = executor.map(_draw_frame_worker, range(an.num_frames), chunksize=chunksize)
+
+                for i, res in results:
+                    if isinstance(res, Exception):
+                        raise res
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise InterruptedError("cancelled")
+                    proc.stdin.write(res)
+                    if progress_cb and (i % 5 == 0 or i == an.num_frames - 1):
+                        progress_cb(i + 1, an.num_frames)
+            proc.stdin.close()
+            ffmpeg_stderr_thread.join(timeout=2.0)
+            err = b"".join(ffmpeg_stderr_lines).decode(errors="replace")
+            if proc.wait() != 0:
+                raise RuntimeError("ffmpeg encoding failed:\n" + err[-400:])
+        except BaseException:
+            try:
+                proc.stdin.close()
+            except Exception:
+                pass
+            proc.kill()
+            proc.wait()
+            if os.path.exists(out_path):
+                try:
+                    os.remove(out_path)
+                except OSError:
+                    pass
+            raise
+    finally:
+        if temp_concat_file and os.path.exists(temp_concat_file):
+            try:
+                os.remove(temp_concat_file)
+            except Exception:
+                pass
