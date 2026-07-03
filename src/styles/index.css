@@ -1,0 +1,59 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  background: #0d1420;
+  color: #cbd5e1;
+  font-family: Inter, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  overflow: hidden;
+}
+
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #26324f; border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: #3b4a6b; }
+
+/* Vertical range inputs used by the mastering strip / EQ. */
+.v-slider {
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 6px;
+  height: 96px;
+  -webkit-appearance: slider-vertical;
+  appearance: slider-vertical;
+  background: transparent;
+  cursor: ns-resize;
+}
+.v-slider::-webkit-slider-runnable-track {
+  width: 4px;
+  background: #26324f;
+  border-radius: 3px;
+}
+.v-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 10px;
+  margin-left: -5px;
+  border-radius: 3px;
+  background: #3b82f6;
+  box-shadow: 0 0 6px rgba(59, 130, 246, 0.6);
+}
+.v-slider:disabled::-webkit-slider-thumb { background: #475569; box-shadow: none; }
+
+.titlebar-drag { -webkit-app-region: drag; }
+.no-drag { -webkit-app-region: no-drag; }
+
+@keyframes pulse-accent {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+.processing-pulse { animation: pulse-accent 1.1s ease-in-out infinite; }

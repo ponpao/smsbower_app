@@ -83,9 +83,57 @@ def test_mono_input_becomes_stereo():
     assert out.shape[1] == 2
 
 
+def test_processing_is_fast_enough_for_batch():
+    """Guards against O(n*k) regressions (e.g. large-kernel np.convolve).
+
+    A ~6s track must process well under real-time so a 15+ file batch stays
+    responsive across the worker pool.
+    """
+    import time
+    audio, sr = _harsh_track(secs=6.0)
+    params = Params(strip=MasterStrip(de_ess=40, comp=25, saturation=25, limit=85),
+                    humanize=60, lufs_target=-14.0)
+    t0 = time.time()
+    engine.process(audio, sr, params)
+    elapsed = time.time() - t0
+    assert elapsed < 6.0, f"processing a 6s file took {elapsed:.1f}s (too slow)"
+
+
+def test_analyze_and_release_check(tmp_path=None):
+    import tempfile, os
+    from travkod import analyze as an
+    from travkod import release as rel
+    audio, sr = _harsh_track(secs=3.0)
+    d = tempfile.mkdtemp()
+    p = os.path.join(d, "t.wav")
+    sf.write(p, audio, sr, subtype="PCM_24")
+    meta = an.analyze_file(p)
+    assert meta["channels"] == 2 and meta["sample_rate"] == sr
+    assert meta["bit_depth"] == 24 and meta["key"] != ""
+    check = rel.check(meta, lufs_target=-14.0, is_ai=True)
+    # AI source must add a disclosure reminder (never a bypass).
+    assert any(i["name"] == "AI disclosure" for i in check["items"])
+
+
+def test_authenticity_reports_interval_not_certainty():
+    import tempfile, os
+    from travkod import authenticity as auth
+    audio, sr = _harsh_track(secs=3.0)
+    d = tempfile.mkdtemp()
+    p = os.path.join(d, "t.wav")
+    sf.write(p, audio, sr, subtype="PCM_24")
+    rep = auth.analyze(p)
+    assert rep["beta"] is True
+    assert rep["ci_low"] <= rep["p_ai"] <= rep["ci_high"]
+    assert rep["ci_high"] > rep["ci_low"], "must report a range, not a single number"
+
+
 if __name__ == "__main__":
     test_lufs_target_and_true_peak()
     test_deharsh_reduces_high_frequency_harshness()
     test_off_target_leaves_loudness_alone()
     test_mono_input_becomes_stereo()
+    test_processing_is_fast_enough_for_batch()
+    test_analyze_and_release_check()
+    test_authenticity_reports_interval_not_certainty()
     print("all engine tests passed")

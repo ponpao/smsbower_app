@@ -56,11 +56,12 @@ def micro_dynamics(x: np.ndarray, sr: int, amount_pct: float, seed: int = 11) ->
         return x
     n = x.shape[0]
     rng = np.random.default_rng(seed)
-    # Smooth noise via cumulative random walk, then low-passed.
+    # Smooth noise via cumulative random walk, then a moving-average lowpass.
+    # uniform_filter1d is O(n) (not O(n*k)), so this stays fast on full songs.
+    from scipy.ndimage import uniform_filter1d
     walk = np.cumsum(rng.normal(0, 1, n))
     k = max(1, int(sr * 0.25))
-    kernel = np.ones(k) / k
-    smooth = np.convolve(walk, kernel, mode="same")
+    smooth = uniform_filter1d(walk, size=k, mode="nearest")
     smooth = smooth / (np.max(np.abs(smooth)) + 1e-9)
     drift = 1.0 + smooth * amt * 0.03    # up to +/-3% at full humanize
     return (x * drift[:, None]).astype(x.dtype, copy=False)
