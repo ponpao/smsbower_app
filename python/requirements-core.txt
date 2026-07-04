@@ -1,4 +1,10 @@
-# Minimal runtime deps (engine runs on these alone)
+# Core runtime — enough to RUN the full app (GUI + DSP), no heavy optionals.
+# Use this if `requirements.txt` fails on a very new Python (e.g. librosa's numba
+# dependency may not have a wheel yet). The app runs fully on these; only
+# automatic key detection, gentle autotune, and one-step MP3 export are skipped
+# (add librosa / lameenc later when wheels are available).
+PyQt6>=6.6
+psutil>=5.9
 numpy>=1.24
 scipy>=1.10
 soundfile>=0.12

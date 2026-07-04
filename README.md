@@ -92,8 +92,26 @@ pip install -r python/requirements.txt
 python run_app.py                    # or:  cd python && python -m travkod_app
 ```
 
-`requirements.txt` includes PyQt6 + psutil + the DSP stack. For just the engine
-(no GUI), `requirements-core.txt` is enough.
+**Windows (py launcher).** Pick one interpreter and use it for both install and
+run — e.g. Python 3.14:
+
+```powershell
+py -3.14 -m pip install -r python\requirements-core.txt
+py -3.14 run_app.py
+```
+
+**Two requirements files:**
+- `requirements-core.txt` — everything needed to run the full app (GUI + DSP).
+  Use this first; it avoids `librosa`/`numba`, which can lack a wheel on a
+  brand-new Python. The app is fully functional on the core set.
+- `requirements.txt` — core **plus** optionals: `librosa` (gentle vocal autotune)
+  and `lameenc` (one-step MP3 export). Add these when wheels are available for
+  your Python (3.11–3.12 have the widest coverage). Without them the app still
+  runs — key detection uses a built-in estimator (no librosa needed), autotune is
+  simply unavailable, and MP3 export falls back to `ffmpeg` if present.
+
+`run_app.py` checks dependencies on startup and prints exactly what to install
+if something is missing.
 
 ### Verifying without a display
 
