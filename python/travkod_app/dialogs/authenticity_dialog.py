@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ..theme import TEXT, TEXT_MUTED, TEXT_DIM, ACCENT, ACCENT_SOFT, BORDER, WARN
+from ..i18n import tr
 
 
 class CIBar(QWidget):
@@ -39,30 +40,31 @@ class AuthenticityDialog(QDialog):
 
     def __init__(self, report: dict, is_ai: bool, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Authenticity Report")
+        self.setWindowTitle(tr("auth.title"))
         self.setMinimumWidth(520)
         self.result_is_ai = is_ai
         root = QVBoxLayout(self)
         root.setContentsMargins(18, 16, 18, 16)
         root.setSpacing(8)
 
-        beta = QLabel("BETA — experimental, may be wrong")
+        beta = QLabel(tr("auth.beta"))
         beta.setStyleSheet(
             f"color:{WARN}; font-size:10px; padding:3px 8px; border:1px solid {WARN};"
             "border-radius:4px;")
-        beta.setFixedWidth(240)
+        beta.setFixedWidth(260)
         beta.setAlignment(Qt.AlignmentFlag.AlignCenter)
         root.addWidget(beta)
 
-        cap = QLabel("Estimated probability this track is AI-generated")
+        cap = QLabel(tr("auth.caption"))
         cap.setStyleSheet(f"color:{TEXT_MUTED}; font-size:11px;")
+        cap.setWordWrap(True)
         root.addWidget(cap)
 
         pct = round(report["p_ai"] * 100)
         lo, hi = round(report["ci_low"] * 100), round(report["ci_high"] * 100)
         big = QLabel(f"~{pct}%")
         big.setStyleSheet(f"color:{TEXT}; font-size:30px; font-weight:700;")
-        rng = QLabel(f"range {lo}–{hi}% · {report['confidence_label']}")
+        rng = QLabel(f"{tr('auth.range')} {lo}–{hi}% · {report['confidence_label']}")
         rng.setStyleSheet(f"color:{TEXT_MUTED}; font-size:11px;")
         row = QHBoxLayout(); row.addWidget(big); row.addSpacing(10)
         row.addWidget(rng, alignment=Qt.AlignmentFlag.AlignBottom); row.addStretch(1)
@@ -70,7 +72,7 @@ class AuthenticityDialog(QDialog):
 
         root.addWidget(CIBar(report["p_ai"], report["ci_low"], report["ci_high"]))
         ends = QHBoxLayout()
-        l0 = QLabel("0% (human)"); l1 = QLabel("100% (AI)")
+        l0 = QLabel(tr("auth.human")); l1 = QLabel(tr("auth.ai"))
         for l in (l0, l1):
             l.setStyleSheet(f"color:{TEXT_DIM}; font-size:9px;")
         ends.addWidget(l0); ends.addStretch(1); ends.addWidget(l1)
@@ -88,28 +90,27 @@ class AuthenticityDialog(QDialog):
 
         root.addSpacing(6)
         mark_row = QHBoxLayout()
-        mark_lbl = QLabel("Mark this source as AI-generated?")
+        mark_lbl = QLabel(tr("auth.markQ"))
         mark_lbl.setStyleSheet(f"color:{TEXT_MUTED}; font-size:11px;")
-        self.mark_btn = QPushButton("Marked AI ✓" if is_ai else "Mark as AI")
+        self.mark_btn = QPushButton(tr("auth.marked") if is_ai else tr("auth.mark"))
         if is_ai:
             self.mark_btn.setProperty("accent", True)
         self.mark_btn.clicked.connect(self._toggle_ai)
         mark_row.addWidget(mark_lbl); mark_row.addStretch(1); mark_row.addWidget(self.mark_btn)
         root.addLayout(mark_row)
 
-        hint = QLabel("Marking a source AI-generated turns on the disclosure reminder in the "
-                      "Release Check — so you disclose where your distributor requires it.")
+        hint = QLabel(tr("auth.markHint"))
         hint.setWordWrap(True)
         hint.setStyleSheet(f"color:{TEXT_DIM}; font-size:10px;")
         root.addWidget(hint)
 
-        close = QPushButton("Close"); close.clicked.connect(self.accept)
+        close = QPushButton(tr("auth.close")); close.clicked.connect(self.accept)
         b = QHBoxLayout(); b.addStretch(1); b.addWidget(close)
         root.addLayout(b)
 
     def _toggle_ai(self):
         self.result_is_ai = not self.result_is_ai
-        self.mark_btn.setText("Marked AI ✓" if self.result_is_ai else "Mark as AI")
+        self.mark_btn.setText(tr("auth.marked") if self.result_is_ai else tr("auth.mark"))
         self.mark_btn.setProperty("accent", self.result_is_ai)
         self.mark_btn.style().unpolish(self.mark_btn)
         self.mark_btn.style().polish(self.mark_btn)

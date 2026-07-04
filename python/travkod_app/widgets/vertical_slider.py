@@ -8,7 +8,7 @@ from __future__ import annotations
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QSlider
 
-from ..theme import ACCENT_SOFT, TEXT_DIM, TEXT_MUTED
+from ..theme import ACCENT, TEXT, TEXT_DIM, TEXT_MUTED
 
 
 class LabeledSlider(QWidget):
@@ -63,10 +63,10 @@ class LabeledSlider(QWidget):
 
     def _update_readout(self, v: float):
         active = abs(v - self._neutral) > 1e-6
-        color = ACCENT_SOFT if active else TEXT_DIM
+        color = ACCENT if active else TEXT_DIM
         self.readout.setStyleSheet(f"font-size:10px; color:{color};")
         self.name.setStyleSheet(
-            f"font-size:10px; color:{'#cbd5e1' if active else TEXT_MUTED};")
+            f"font-size:10px; color:{TEXT if active else TEXT_MUTED};")
         self.readout.setText(self._fmt(v))
 
     def set_value(self, v: float):

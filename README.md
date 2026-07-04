@@ -75,6 +75,11 @@ The engine runs on `numpy`/`scipy`/`soundfile`/`pyloudnorm` alone; `librosa`
   and a plain-language "this is probabilistic" note.
 - **Transport bar** — play/next, Effect toggle (A/B processed vs original),
   waveform scrubber, volume. Shortcuts: `Space` play/pause, `Cmd/Ctrl+E` export.
+- **Bilingual UI (EN / ខ្មែរ)** — toggle in the title bar. Khmer renders in the
+  bundled **Kantumruy Pro** font (OFL, `resources/fonts/`); the choice persists.
+
+The UI is a **light theme with a green accent** (see `docs/console.png` for
+English, `docs/console_kh.png` for Khmer).
 
 ---
 

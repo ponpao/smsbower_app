@@ -12,7 +12,8 @@ from PyQt6.QtWidgets import (
 )
 
 from ..state import AppState, STRIP_CONTROLS, EQ_LABELS, QUICK_EQ
-from ..theme import TEXT_MUTED, TEXT, ACCENT_SOFT, TEXT_DIM
+from ..theme import TEXT_MUTED, ACCENT, BORDER_SOFT
+from ..i18n import tr, I18N
 from ..widgets.vertical_slider import LabeledSlider
 from ..widgets.toggle import ToggleSwitch
 from travkod.params import Params, EQ_BANDS, FACTORY_TEMPLATES
@@ -45,26 +46,29 @@ class SettingConsole(QWidget):
         proot.addWidget(self._build_body())
         root.addWidget(panel)
 
-    # ---- header bar ---------------------------------------------------
+        I18N.changed.connect(self._retranslate)
+        self._retranslate()
+
     def _build_header(self) -> QWidget:
         bar = QFrame()
-        bar.setStyleSheet("border-bottom:1px solid #1b2740;")
+        bar.setStyleSheet(f"border-bottom:1px solid {BORDER_SOFT};")
         lay = QHBoxLayout(bar)
         lay.setContentsMargins(12, 8, 12, 8)
         lay.setSpacing(8)
 
-        lay.addWidget(self._muted("Template"))
+        self.tpl_lbl = self._muted("")
+        lay.addWidget(self.tpl_lbl)
         self.template_combo = QComboBox()
         names = ["Default"] + [t for t in FACTORY_TEMPLATES if t != "Default"]
         self.template_combo.addItems(names)
         self.template_combo.currentTextChanged.connect(self._apply_template)
         lay.addWidget(self.template_combo)
 
-        self.presets_btn = QPushButton("Presets ▾")
+        self.presets_btn = QPushButton()
         self.presets_btn.clicked.connect(self._presets_menu)
         lay.addWidget(self.presets_btn)
 
-        self.quick_btn = QPushButton("Quick EQ ◂")
+        self.quick_btn = QPushButton()
         self.quick_btn.setProperty("accent", True)
         self.quick_btn.clicked.connect(self._quick_eq_menu)
         lay.addWidget(self.quick_btn)
@@ -76,46 +80,46 @@ class SettingConsole(QWidget):
         hm = QHBoxLayout(hm_box)
         hm.setContentsMargins(10, 4, 8, 4)
         hm.setSpacing(8)
-        hm.addWidget(QLabel("Humanize & Master"))
+        self.hm_lbl = QLabel()
+        hm.addWidget(self.hm_lbl)
         self.hm_toggle = ToggleSwitch(self.state.humanize_on)
         self.hm_toggle.toggled_.connect(self._on_humanize_toggle)
         hm.addWidget(self.hm_toggle)
-        self.auto_btn = QPushButton("Auto")
+        self.auto_btn = QPushButton()
         self.auto_btn.setCheckable(True)
         self.auto_btn.setChecked(self.state.auto_intensity)
         self.auto_btn.clicked.connect(self._toggle_auto)
-        self.auto_btn.setFixedWidth(52)
+        self.auto_btn.setFixedWidth(58)
         hm.addWidget(self.auto_btn)
         lay.addWidget(hm_box)
 
-        self.ai_btn = QPushButton("☆ Analyze AI")
+        self.ai_btn = QPushButton()
         self.ai_btn.clicked.connect(self.analyzeAiRequested)
         lay.addWidget(self.ai_btn)
 
-        self.export_btn = QPushButton("Export…")
+        self.export_btn = QPushButton()
         self.export_btn.setProperty("accent", True)
         self.export_btn.clicked.connect(self.exportRequested)
         lay.addWidget(self.export_btn)
         return bar
 
-    # ---- body: strip + EQ ---------------------------------------------
     def _build_body(self) -> QWidget:
         body = QWidget()
         lay = QHBoxLayout(body)
         lay.setContentsMargins(12, 10, 12, 12)
         lay.setSpacing(10)
 
-        # Mastering strip card
         self.strip_card = QFrame()
         self.strip_card.setProperty("card", True)
         sc = QVBoxLayout(self.strip_card)
         sc.setContentsMargins(12, 10, 12, 10)
         head = QHBoxLayout()
-        title = QLabel("MASTERING STRIP")
-        title.setStyleSheet(f"color:{ACCENT_SOFT}; font-size:10px; letter-spacing:2px;")
-        head.addWidget(title)
+        self.strip_title = QLabel()
+        self.strip_title.setStyleSheet(f"color:{ACCENT}; font-size:10px; letter-spacing:2px; font-weight:700;")
+        head.addWidget(self.strip_title)
         head.addStretch(1)
-        head.addWidget(self._muted("Humanize"))
+        self.humanize_cap = self._muted("")
+        head.addWidget(self.humanize_cap)
         self.humanize_slider = QSlider(Qt.Orientation.Horizontal)
         self.humanize_slider.setRange(0, 100)
         self.humanize_slider.setValue(int(self.state.params.humanize))
@@ -123,7 +127,7 @@ class SettingConsole(QWidget):
         self.humanize_slider.valueChanged.connect(self._on_humanize_amount)
         head.addWidget(self.humanize_slider)
         self.humanize_lbl = QLabel(f"{int(self.state.params.humanize)}%")
-        self.humanize_lbl.setStyleSheet(f"color:{ACCENT_SOFT}; font-size:10px;")
+        self.humanize_lbl.setStyleSheet(f"color:{ACCENT}; font-size:10px;")
         self.humanize_lbl.setFixedWidth(34)
         head.addWidget(self.humanize_lbl)
         sc.addLayout(head)
@@ -139,14 +143,13 @@ class SettingConsole(QWidget):
         sc.addLayout(strip_row)
         lay.addWidget(self.strip_card, stretch=3)
 
-        # EQ card
         eq_card = QFrame()
         eq_card.setProperty("card", True)
         ec = QVBoxLayout(eq_card)
         ec.setContentsMargins(12, 10, 12, 10)
-        eq_title = QLabel("EQ · 10-BAND")
-        eq_title.setStyleSheet(f"color:{ACCENT_SOFT}; font-size:10px; letter-spacing:2px;")
-        ec.addWidget(eq_title)
+        self.eq_title = QLabel()
+        self.eq_title.setStyleSheet(f"color:{ACCENT}; font-size:10px; letter-spacing:2px; font-weight:700;")
+        ec.addWidget(self.eq_title)
         eq_row = QHBoxLayout()
         eq_row.setSpacing(2)
         for i, _band in enumerate(EQ_BANDS):
@@ -157,6 +160,19 @@ class SettingConsole(QWidget):
         ec.addLayout(eq_row)
         lay.addWidget(eq_card, stretch=2)
         return body
+
+    # ---- i18n ---------------------------------------------------------
+    def _retranslate(self):
+        self.tpl_lbl.setText(tr("console.template"))
+        self.presets_btn.setText(tr("console.presets") + " ▾")
+        self.quick_btn.setText(tr("console.quickEq") + " ◂")
+        self.hm_lbl.setText(tr("console.humanizeMaster"))
+        self.auto_btn.setText(tr("console.auto") if self.state.auto_intensity else tr("console.manual"))
+        self.ai_btn.setText(tr("console.analyzeAi"))
+        self.export_btn.setText(tr("console.export"))
+        self.strip_title.setText(tr("console.masteringStrip"))
+        self.humanize_cap.setText(tr("console.humanize"))
+        self.eq_title.setText(tr("console.eq"))
 
     # ---- helpers ------------------------------------------------------
     def _muted(self, text: str) -> QLabel:
@@ -188,7 +204,7 @@ class SettingConsole(QWidget):
 
     def _toggle_auto(self):
         self.state.auto_intensity = self.auto_btn.isChecked()
-        self.auto_btn.setText("Auto" if self.state.auto_intensity else "Manual")
+        self.auto_btn.setText(tr("console.auto") if self.state.auto_intensity else tr("console.manual"))
 
     def _mark_custom(self):
         if self.template_combo.currentText() != "Custom":
@@ -227,21 +243,20 @@ class SettingConsole(QWidget):
         self.humanize_slider.blockSignals(False)
         self.humanize_lbl.setText(f"{int(p.humanize)}%")
 
-    # ---- menus --------------------------------------------------------
     def _presets_menu(self):
         menu = QMenu(self)
-        save = menu.addAction("＋ Save current…")
+        save = menu.addAction(tr("console.savePreset"))
         menu.addSeparator()
         presets = self.preset_store.load()
         entries = {}
         if not presets:
-            a = menu.addAction("No saved presets")
+            a = menu.addAction(tr("console.noPresets"))
             a.setEnabled(False)
         for p in presets:
             entries[menu.addAction(p["name"])] = p
         chosen = menu.exec(self.presets_btn.mapToGlobal(self.presets_btn.rect().bottomLeft()))
         if chosen == save:
-            name, ok = QInputDialog.getText(self, "Save preset", "Preset name:")
+            name, ok = QInputDialog.getText(self, tr("console.savePresetTitle"), tr("console.presetName"))
             if ok and name:
                 self.preset_store.save(name, self.state.params)
                 self.presetsChanged.emit()

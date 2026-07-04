@@ -15,13 +15,15 @@ from PyQt6.QtWidgets import (
 )
 
 from ..state import QueueItem
-from ..theme import (TEXT_MUTED, TEXT, TEXT_DIM, ACCENT_SOFT, GOOD, WARN, BAD)
+from ..theme import TEXT_MUTED, TEXT, TEXT_DIM, ACCENT, GOOD, WARN, BAD
+from ..i18n import tr, I18N
 
-COLUMNS = ["#", "Filename", "Duration", "Type", "Key/Major", "Sample Rate / Bits",
-           "Loudness", "True Peak", "Channels", "Status"]
+COLUMN_KEYS = ["col.no", "col.filename", "col.duration", "col.type", "col.key",
+               "col.samplerate", "col.loudness", "col.truepeak", "col.channels",
+               "col.status"]
 
 STATUS_COLOR = {
-    "Idle": TEXT_DIM, "Queued": WARN, "Processing": ACCENT_SOFT,
+    "Idle": TEXT_DIM, "Queued": WARN, "Processing": ACCENT,
     "Done": GOOD, "Error": BAD, "Paused": TEXT_MUTED,
 }
 
@@ -31,9 +33,9 @@ class BatchQueue(QWidget):
     addFolderRequested = pyqtSignal()
     startExportRequested = pyqtSignal()
     stopExportRequested = pyqtSignal()
-    analyzeRequested = pyqtSignal(str)          # job_id
+    analyzeRequested = pyqtSignal(str)
     openOutputRequested = pyqtSignal()
-    selectionChanged = pyqtSignal(str)          # job_id or ""
+    selectionChanged = pyqtSignal(str)
 
     def __init__(self):
         super().__init__()
@@ -46,13 +48,13 @@ class BatchQueue(QWidget):
         root.setSpacing(6)
 
         header = QHBoxLayout()
-        h = QLabel("BATCH QUEUE")
-        h.setStyleSheet(f"color:{TEXT_MUTED}; font-size:11px; letter-spacing:2px;")
-        header.addWidget(h)
+        self.title = QLabel()
+        self.title.setStyleSheet(f"color:{TEXT_MUTED}; font-size:11px; letter-spacing:2px; font-weight:600;")
+        header.addWidget(self.title)
         header.addStretch(1)
-        self.btn_files = QPushButton("+ Files")
-        self.btn_folder = QPushButton("+ Folder")
-        self.btn_export = QPushButton("Start Export")
+        self.btn_files = QPushButton()
+        self.btn_folder = QPushButton()
+        self.btn_export = QPushButton()
         self.btn_export.setProperty("accent", True)
         self.btn_files.clicked.connect(self.addFilesRequested)
         self.btn_folder.clicked.connect(self.addFolderRequested)
@@ -62,8 +64,8 @@ class BatchQueue(QWidget):
             header.addWidget(b)
         root.addLayout(header)
 
-        self.table = QTableWidget(0, len(COLUMNS))
-        self.table.setHorizontalHeaderLabels(COLUMNS)
+        self.table = QTableWidget(0, len(COLUMN_KEYS))
+        self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -78,6 +80,19 @@ class BatchQueue(QWidget):
         for c in (0, 2, 3, 4, 5, 6, 7, 8, 9):
             hh.setSectionResizeMode(c, QHeaderView.ResizeMode.ResizeToContents)
         root.addWidget(self.table)
+
+        I18N.changed.connect(self._retranslate)
+        self._retranslate()
+
+    # ---- i18n ---------------------------------------------------------
+    def _retranslate(self):
+        self.title.setText(tr("queue.title"))
+        self.btn_files.setText(tr("btn.files"))
+        self.btn_folder.setText(tr("btn.folder"))
+        self.btn_export.setText(tr("btn.stop") if self.exporting else tr("btn.startExport"))
+        self.table.setHorizontalHeaderLabels([tr(k) for k in COLUMN_KEYS])
+        for row in range(len(self.items)):
+            self._render_row(row)
 
     # ---- public API ---------------------------------------------------
     def add_item(self, item: QueueItem):
@@ -97,7 +112,7 @@ class BatchQueue(QWidget):
 
     def set_exporting(self, on: bool):
         self.exporting = on
-        self.btn_export.setText("Stop" if on else "Start Export")
+        self.btn_export.setText(tr("btn.stop") if on else tr("btn.startExport"))
         self.btn_export.setProperty("accent", not on)
         self.btn_export.setProperty("danger", on)
         self.btn_export.style().unpolish(self.btn_export)
@@ -131,9 +146,8 @@ class BatchQueue(QWidget):
             self._render_row(idx)
 
     def _cell(self, text: str, color: str = TEXT):
-        item = QTableWidgetItem(text)
-        item.setForeground(Qt.GlobalColor.transparent)  # overridden by stylesheet color
         from PyQt6.QtGui import QColor
+        item = QTableWidgetItem(text)
         item.setForeground(QColor(color))
         return item
 
@@ -157,7 +171,6 @@ class BatchQueue(QWidget):
         for c, (v, col) in enumerate(zip(vals, colors)):
             self.table.setItem(row, c, self._cell(v, col))
 
-        # Status column: progress bar while Processing, else a colored label.
         if it.status == "Processing":
             bar = QProgressBar()
             bar.setRange(0, 100)
@@ -167,7 +180,9 @@ class BatchQueue(QWidget):
             self.table.setCellWidget(row, 9, bar)
         else:
             self.table.removeCellWidget(row, 9)
-            label = it.status + (f" · {it.error[:24]}" if it.status == "Error" and it.error else "")
+            label = tr(f"status.{it.status}")
+            if it.status == "Error" and it.error:
+                label += f" · {it.error[:24]}"
             self.table.setItem(row, 9, self._cell(label, STATUS_COLOR.get(it.status, TEXT)))
 
     # ---- events -------------------------------------------------------
@@ -175,20 +190,19 @@ class BatchQueue(QWidget):
         self.stopExportRequested.emit() if self.exporting else self.startExportRequested.emit()
 
     def _on_select(self):
-        cid = self.current_id()
-        self.selectionChanged.emit(cid or "")
+        self.selectionChanged.emit(self.current_id() or "")
 
     def _context_menu(self, pos):
         menu = QMenu(self)
-        act_selall = menu.addAction("Select all")
-        act_files = menu.addAction("Add files…")
-        act_folder = menu.addAction("Add folder…")
-        act_remove = menu.addAction("Remove selected")
-        act_clear = menu.addAction("Clear all")
+        act_selall = menu.addAction(tr("menu.selectAll"))
+        act_files = menu.addAction(tr("menu.addFiles"))
+        act_folder = menu.addAction(tr("menu.addFolder"))
+        act_remove = menu.addAction(tr("menu.remove"))
+        act_clear = menu.addAction(tr("menu.clear"))
         menu.addSeparator()
-        act_analyze = menu.addAction("Analyze file")
-        act_export = menu.addAction("Stop export" if self.exporting else "Start export")
-        act_open = menu.addAction("Open output folder")
+        act_analyze = menu.addAction(tr("menu.analyze"))
+        act_export = menu.addAction(tr("menu.stopExport") if self.exporting else tr("menu.startExport"))
+        act_open = menu.addAction(tr("menu.openOutput"))
 
         act_remove.setEnabled(bool(self.selected_ids()))
         act_clear.setEnabled(bool(self.items))

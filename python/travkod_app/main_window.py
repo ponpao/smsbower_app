@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import (
 
 from .state import (AppState, QueueItem, ExportSettings, PresetStore, SettingsStore,
                     default_output_dir)
-from .theme import QSS, BG
+from .theme import BG
 from .widgets.title_bar import TitleBar
 from .widgets.batch_queue import BatchQueue
 from .widgets.setting_console import SettingConsole
@@ -166,7 +166,6 @@ class MainWindow(QMainWindow):
     # ---- export -------------------------------------------------------
     def open_export_dialog(self):
         dlg = ExportDialog(self.state.export, self)
-        dlg.setStyleSheet(QSS)
         if dlg.exec() and dlg.start:
             self.start_export()
 
@@ -316,7 +315,6 @@ class MainWindow(QMainWindow):
         if not it:
             return
         dlg = AuthenticityDialog(report, it.is_ai, self)
-        dlg.setStyleSheet(QSS)
         dlg.exec()
         it.is_ai = dlg.result_is_ai
 
@@ -326,7 +324,6 @@ class MainWindow(QMainWindow):
         meta = it.meta if it else None
         dlg = ReleaseDialog(meta, self.state.export.lufs_target,
                             it.is_ai if it else False, self)
-        dlg.setStyleSheet(QSS)
         dlg.exec()
 
     # ---- helpers ------------------------------------------------------
@@ -364,7 +361,6 @@ class MainWindow(QMainWindow):
 
     def _show_first_run(self):
         dlg = FirstRunDialog(self)
-        dlg.setStyleSheet(QSS)
         dlg.exec()
         self.settings.set("first_run_ack", True)
 

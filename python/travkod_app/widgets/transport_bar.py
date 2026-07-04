@@ -12,8 +12,9 @@ from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QLabel, QPushButton, QSlider,
 )
 
-from ..theme import TEXT_MUTED, TEXT_DIM, ACCENT_SOFT, BG, BORDER_SOFT
+from ..theme import TEXT_MUTED, TEXT_DIM, BG, BORDER_SOFT
 from ..widgets.toggle import ToggleSwitch
+from ..i18n import tr, I18N
 
 try:
     from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
@@ -62,13 +63,14 @@ class TransportBar(QWidget):
         lay.addWidget(self.play_btn)
         lay.addWidget(self.next_btn)
 
-        lay.addWidget(self._muted("Effect"))
+        self.effect_cap = self._muted("")
+        lay.addWidget(self.effect_cap)
         self.effect_toggle = ToggleSwitch(True)
         self.effect_toggle.toggled_.connect(self._on_effect)
         lay.addWidget(self.effect_toggle)
-        self.effect_lbl = QLabel("Processed")
+        self.effect_lbl = QLabel()
         self.effect_lbl.setStyleSheet(f"color:{TEXT_DIM}; font-size:10px;")
-        self.effect_lbl.setFixedWidth(60)
+        self.effect_lbl.setFixedWidth(64)
         lay.addWidget(self.effect_lbl)
 
         self.pos_lbl = QLabel("0:00")
@@ -90,14 +92,23 @@ class TransportBar(QWidget):
         self.vol.valueChanged.connect(self._on_vol)
         lay.addWidget(self.vol)
 
-        self.release_btn = QPushButton("Release Check")
+        self.release_btn = QPushButton()
         self.release_btn.clicked.connect(self.releaseCheckRequested)
         lay.addWidget(self.release_btn)
 
         if not _HAVE_MEDIA:
             for w in (self.play_btn, self.next_btn, self.scrub, self.vol):
                 w.setEnabled(False)
-            self.play_btn.setToolTip("Audio playback unavailable on this system")
+
+        I18N.changed.connect(self._retranslate)
+        self._retranslate()
+
+    def _retranslate(self):
+        self.effect_cap.setText(tr("transport.effect"))
+        self.effect_lbl.setText(tr("transport.processed") if self._effect else tr("transport.original"))
+        self.release_btn.setText(tr("transport.releaseCheck"))
+        if not _HAVE_MEDIA:
+            self.play_btn.setToolTip(tr("transport.noAudio"))
 
     def _muted(self, t):
         lbl = QLabel(t)
@@ -138,7 +149,7 @@ class TransportBar(QWidget):
 
     def _on_effect(self, on: bool):
         self._effect = on
-        self.effect_lbl.setText("Processed" if on else "Original")
+        self.effect_lbl.setText(tr("transport.processed") if on else tr("transport.original"))
         self.effectToggled.emit(on)
         self._load_current(keep_pos=True)
 

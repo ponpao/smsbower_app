@@ -5,20 +5,21 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton, QHBoxLayout
 
 from ..theme import TEXT, TEXT_MUTED, TEXT_DIM, GOOD, WARN
+from ..i18n import tr
 from travkod import release as release_mod
 
 
 class ReleaseDialog(QDialog):
     def __init__(self, meta: dict, lufs_target, is_ai: bool, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Release Readiness Check")
+        self.setWindowTitle(tr("rel.title"))
         self.setMinimumWidth(520)
         root = QVBoxLayout(self)
         root.setContentsMargins(18, 16, 18, 16)
         root.setSpacing(8)
 
         if not meta:
-            root.addWidget(QLabel("Select and analyze a track first."))
+            root.addWidget(QLabel(tr("rel.selectFirst")))
             return
 
         check = release_mod.check(meta, lufs_target=lufs_target, is_ai=is_ai)
@@ -39,14 +40,12 @@ class ReleaseDialog(QDialog):
             row.addWidget(text, stretch=1)
             root.addLayout(row)
 
-        note = QLabel("This checklist reports objective facts about your master. It never tells "
-                      "you how to “pass” a distributor check. Where a release requires AI "
-                      "disclosure, disclose it.")
+        note = QLabel(tr("rel.note"))
         note.setWordWrap(True)
         note.setStyleSheet(f"color:{TEXT_DIM}; font-size:10px;")
         root.addSpacing(6)
         root.addWidget(note)
 
-        close = QPushButton("Close"); close.clicked.connect(self.accept)
+        close = QPushButton(tr("rel.close")); close.clicked.connect(self.accept)
         b = QHBoxLayout(); b.addStretch(1); b.addWidget(close)
         root.addLayout(b)
