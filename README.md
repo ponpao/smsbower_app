@@ -33,20 +33,21 @@ All processing runs **locally** on your machine by default. Nothing is uploaded.
 
 ## Architecture
 
+TRAVKOD is a **pure-Python desktop app**: PyQt6 for the UI, calling the shared
+DSP core directly on a thread pool. There is no separate backend process or IPC —
+one process, one language.
+
 ```
-React UI ──IPC──> Job Orchestrator (Node/Electron) ──> Python DSP Worker Pool
-   ▲                     │                                   │
-   └──── progress ◄──────┴──────── per-file events ◄─────────┘
+PyQt6 UI ──signals──> QThreadPool worker pool ──> travkod DSP core
+   ▲                        │                          │
+   └──── progress ◄─────────┴──── per-file signals ◄───┘
 Files: import queue -> humanize + master -> export (WAV/FLAC/MP3)
 ```
 
-- **Frontend** — React + TypeScript + Tailwind (dark theme), Vite.
-- **Shell** — Electron (frameless window matching the reference UI).
-- **Orchestrator** — Node manages the batch queue and a pool of Python worker
-  processes (one child per "Thread", 1–8). Statuses: Idle / Queued / Processing /
-  Done / Error / Paused.
-- **DSP backend** — Python 3.11 workers speaking newline-delimited JSON over
-  stdio; they stream per-file progress events for the queue.
+- **UI** — PyQt6, frameless dark window matching the reference (`python/travkod_app/`).
+- **Worker pool** — `QThreadPool` sized to the user's "Threads" setting (1–8);
+  each file is a `QRunnable` calling the DSP core and streaming progress via Qt
+  signals. Statuses: Idle / Queued / Processing / Done / Error / Paused.
 - **Engine** — `python/travkod/humanize_master.py`: low-cut → humanize
   (wow/flutter + micro-dynamics) → saturation → parametric + 10-band EQ → de-ess →
   gate → compression → air → reverb/echo → stereo width → true-peak limiter →
@@ -54,6 +55,10 @@ Files: import queue -> humanize + master -> export (WAV/FLAC/MP3)
 
 The engine runs on `numpy`/`scipy`/`soundfile`/`pyloudnorm` alone; `librosa`
 (key/pitch), `lameenc`/`ffmpeg` (MP3) and `pedalboard` are optional accelerators.
+
+> An earlier **Electron + React** shell also lives in this repo (`electron/`,
+> `src/`) driving the same `travkod` DSP core over a stdio worker (`worker.py`).
+> The PyQt6 app is the primary, actively-built implementation.
 
 ---
 
@@ -79,43 +84,53 @@ The engine runs on `numpy`/`scipy`/`soundfile`/`pyloudnorm` alone; `librosa`
 
 ## Setup (development)
 
-Requirements: **Node 18+**, **Python 3.11**.
+Requirements: **Python 3.11**. On Linux you also need Qt's runtime libs
+(`libegl1 libgl1 libxkbcommon0 libglib2.0-0`); Windows/macOS wheels bundle them.
 
 ```bash
-# 1. Python DSP backend
 python3 -m venv .venv
 source .venv/bin/activate            # Windows: .venv\Scripts\activate
-pip install -r python/requirements.txt      # or requirements-core.txt for the minimal engine
+pip install -r python/requirements.txt
 
-# 2. Frontend + shell
-npm install
-
-# 3. Run the app (Vite dev server + Electron)
-npm run dev
+# Run the app
+python run_app.py                    # or:  cd python && python -m travkod_app
 ```
 
-### Verifying the engine without the GUI
+`requirements.txt` includes PyQt6 + psutil + the DSP stack. For just the engine
+(no GUI), `requirements-core.txt` is enough.
+
+### Verifying without a display
 
 ```bash
-python python/tests/test_engine.py           # acceptance checks (LUFS, true-peak, de-harsh)
-node scripts/batch_smoke.mjs /path/to/folder /path/to/out 4   # batch worker-pool smoke test
+python python/tests/test_engine.py                       # DSP acceptance checks
+QT_QPA_PLATFORM=offscreen python python/tests/test_app_smoke.py   # full app batch path, headless
 ```
 
 ---
 
 ## Building installers
 
+The app is packaged with **PyInstaller** (see `scripts/build_pyinstaller.md`):
+
 ```bash
-npm run dist          # current platform
-npm run dist:win      # Windows NSIS installer
-npm run dist:mac      # macOS dmg
+pip install pyinstaller
+pyinstaller travkod.spec             # produces dist/TRAVKOD
 ```
 
-Packaging embeds the Python worker (`extraResources`). For a self-contained
+This bundles Python, PyQt6 and the DSP stack into a single distributable — no
+separate runtime needed on the target machine. **Code-signing** requires your own
+certificates (`scripts/signing.md`).
+
+<details><summary>Legacy Electron build</summary>
+
+The Electron shell builds with `npm install && npm run dist`. Packaging embeds
+the Python worker (`extraResources`); for a self-contained
 installer, place a portable Python 3.11 runtime with the deps installed at
 `python-embed/` before building (see `scripts/prepare_python.md`); otherwise the
 app falls back to a system `python3`. **Code-signing** requires your own
 certificates — see `scripts/signing.md`.
+
+</details>
 
 ---
 

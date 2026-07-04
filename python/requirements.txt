@@ -1,7 +1,9 @@
+# TRAVKOD full runtime (PyQt6 desktop app + DSP engine)
+PyQt6>=6.6
+psutil>=5.9
 numpy>=1.24
 scipy>=1.10
 soundfile>=0.12
 pyloudnorm>=0.1.1
-librosa>=0.10
-lameenc>=1.7
-pedalboard>=0.9
+librosa>=0.10        # optional: key/pitch detection + gentle autotune
+lameenc>=1.7         # optional: MP3 export (ffmpeg also works)
