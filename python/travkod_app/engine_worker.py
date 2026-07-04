@@ -1,9 +1,9 @@
 """Background tasks driving the shared DSP core from the PyQt6 UI.
 
-Because everything is one Python process now, there is no stdio bridge: the batch
-queue is a QThreadPool and each file is a QRunnable that calls
-``travkod.humanize_master.process`` directly, streaming progress back to the UI
-through Qt signals. The user's "Threads" setting maps to the pool size (1-8).
+Everything runs in one Python process: the batch queue is a QThreadPool and each
+file is a QRunnable that calls ``travkod.humanize_master.process`` directly,
+streaming progress back to the UI through Qt signals. The user's "Threads"
+setting maps to the pool size (1-8).
 
 All processing is local; nothing leaves the machine.
 """

@@ -1,13 +1,17 @@
+# Python
 .venv/
-node_modules/
-dist/
-dist-electron/
-release/
+venv/
 __pycache__/
 *.pyc
-.DS_Store
-python/build/
-python-embed/
-*.log
+*.pyo
+*.egg-info/
+
+# PyInstaller build output
 build/
+dist/
+release/
 *.spec.bak
+
+# OS / editor
+.DS_Store
+*.log

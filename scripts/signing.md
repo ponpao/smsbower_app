@@ -1,16 +1,31 @@
 # Code signing
 
 Signed installers require your own certificates; they are not committed here.
+TRAVKOD is built with PyInstaller (see `build_pyinstaller.md`), so signing is
+applied to the produced app/installer after the build.
 
-## Windows (NSIS)
-Set before `npm run dist:win`:
-- `CSC_LINK` — path/base64 of your `.pfx`
-- `CSC_KEY_PASSWORD` — its password
-electron-builder signs the installer and app automatically.
+## Windows
+Build `dist/TRAVKOD` with PyInstaller, then sign the executable (and your
+installer) with `signtool`:
 
-## macOS (dmg)
-- `CSC_LINK` / `CSC_KEY_PASSWORD` — Developer ID Application cert
-- Notarize with `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`
-  (electron-builder runs notarization when these are present).
+```powershell
+signtool sign /fd SHA256 /a /f mycert.pfx /p <password> ^
+  /tr http://timestamp.digicert.com /td SHA256 dist\TRAVKOD\TRAVKOD.exe
+```
+
+Wrap `dist/TRAVKOD` with Inno Setup or NSIS for an installer, then sign the
+installer the same way.
+
+## macOS
+Build a `.app` (add a `BUNDLE(...)` step to `travkod.spec`), then sign and
+notarize with your Developer ID:
+
+```bash
+codesign --deep --force --options runtime \
+  --sign "Developer ID Application: <you> (<TEAMID>)" dist/TRAVKOD.app
+xcrun notarytool submit dist/TRAVKOD.dmg \
+  --apple-id "<APPLE_ID>" --team-id "<TEAMID>" --password "<APP_SPECIFIC_PW>" --wait
+xcrun stapler staple dist/TRAVKOD.dmg
+```
 
 Never commit certificates or passwords.

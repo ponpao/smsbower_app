@@ -56,10 +56,6 @@ Files: import queue -> humanize + master -> export (WAV/FLAC/MP3)
 The engine runs on `numpy`/`scipy`/`soundfile`/`pyloudnorm` alone; `librosa`
 (key/pitch), `lameenc`/`ffmpeg` (MP3) and `pedalboard` are optional accelerators.
 
-> An earlier **Electron + React** shell also lives in this repo (`electron/`,
-> `src/`) driving the same `travkod` DSP core over a stdio worker (`worker.py`).
-> The PyQt6 app is the primary, actively-built implementation.
-
 ---
 
 ## Features
@@ -120,17 +116,6 @@ pyinstaller travkod.spec             # produces dist/TRAVKOD
 This bundles Python, PyQt6 and the DSP stack into a single distributable — no
 separate runtime needed on the target machine. **Code-signing** requires your own
 certificates (`scripts/signing.md`).
-
-<details><summary>Legacy Electron build</summary>
-
-The Electron shell builds with `npm install && npm run dist`. Packaging embeds
-the Python worker (`extraResources`); for a self-contained
-installer, place a portable Python 3.11 runtime with the deps installed at
-`python-embed/` before building (see `scripts/prepare_python.md`); otherwise the
-app falls back to a system `python3`. **Code-signing** requires your own
-certificates — see `scripts/signing.md`.
-
-</details>
 
 ---
 
