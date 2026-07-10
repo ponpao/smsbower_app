@@ -506,6 +506,30 @@ class VisualizerFrame(ctk.CTkFrame):
                                    allow_multiple=True)
         self.audio_zone.pack(fill="x", padx=6, pady=(4, 4))
 
+        # ---- Tracklist Manager (bulk songs: reorder / remove / add) ----
+        self.tracks_box = ctk.CTkFrame(page, corner_radius=20, fg_color=CARD,
+                                       border_width=1, border_color=CARD_BORDER)
+        self.tracks_box.pack(fill="x", padx=6, pady=(4, 4))
+        head = ctk.CTkFrame(self.tracks_box, fg_color="transparent")
+        head.pack(fill="x", padx=12, pady=(10, 2))
+        ctk.CTkLabel(head, text="♪ Tracklist Manager",
+                     font=ctk.CTkFont(size=13, weight="bold")).pack(side="left")
+        self.tracks_count_lbl = ctk.CTkLabel(head, text="0 songs",
+                                             font=ctk.CTkFont(size=11),
+                                             text_color=MUTED)
+        self.tracks_count_lbl.pack(side="right")
+        self.tracks_rows = ctk.CTkFrame(self.tracks_box, fg_color="transparent")
+        self.tracks_rows.pack(fill="x", padx=8, pady=(0, 2))
+        trow = ctk.CTkFrame(self.tracks_box, fg_color="transparent")
+        trow.pack(fill="x", padx=12, pady=(4, 12))
+        ctk.CTkButton(trow, text="➕ Add Songs", height=28, corner_radius=20,
+                      fg_color=ACCENT, hover_color=ACCENT_HOVER,
+                      command=self._tracks_add).pack(side="left", fill="x",
+                                                     expand=True)
+        self._grey_btn(trow, "🗑 Clear All", self._tracks_clear, height=28,
+                       width=90).pack(side="left", padx=(6, 0))
+        self._refresh_track_rows()
+
         if not HAS_DND:
             ctk.CTkLabel(page, text="ℹ️ Drag & drop needs 'pip install tkinterdnd2' — click a card to browse.",
                          font=ctk.CTkFont(size=11), wraplength=400, justify="left",
@@ -691,7 +715,8 @@ class VisualizerFrame(ctk.CTkFrame):
         
         self.album_style = ctk.CTkOptionMenu(
             self.title_album_frame,
-            values=["1. Kinetic Slide-In", "2. Side Playlist Panel", "3. Live Wave Indicator",
+            values=["11. Playlist Cover (YouTube)", "1. Kinetic Slide-In",
+                    "2. Side Playlist Panel", "3. Live Wave Indicator",
                     "4. Modern Ticker Bar", "5. Neon Glow Label", "6. Cinematic Corner Stamp",
                     "7. Top Header Banner", "8. Minimalist Drop Shadow", "9. Centered Focal Board",
                     "10. Compact Pill Capsule"],
@@ -953,9 +978,12 @@ class VisualizerFrame(ctk.CTkFrame):
             paths = [paths]
         self.audio_paths = list(paths)
         self.analysis = None
+        self.vocal_isolated_path = None
         self._stop_sound()
         self._pv_playing = False
         self._pv_t = 0.0
+        self._pv_key = None
+        self._refresh_track_rows()
         if self.audio_paths:
             first_path = self.audio_paths[0]
             if not self.title_entry.get().strip():
@@ -963,6 +991,81 @@ class VisualizerFrame(ctk.CTkFrame):
             self._status("Analyzing audio…")
             self._analyzing = True
             threading.Thread(target=self._analyze_worker, args=(self.audio_paths,), daemon=True).start()
+
+    # ---- Tracklist Manager ----
+
+    def _refresh_track_rows(self):
+        if not hasattr(self, "tracks_rows"):
+            return
+        for child in self.tracks_rows.winfo_children():
+            child.destroy()
+        n = len(self.audio_paths)
+        self.tracks_count_lbl.configure(text=f"{n} song{'s' if n != 1 else ''}")
+        if not n:
+            ctk.CTkLabel(self.tracks_rows, text="Drop songs above — order = play order",
+                         font=ctk.CTkFont(size=11), text_color=MUTED
+                         ).pack(anchor="w", padx=6, pady=4)
+            return
+        for i, p in enumerate(self.audio_paths):
+            row = ctk.CTkFrame(self.tracks_rows, fg_color="transparent")
+            row.pack(fill="x", pady=1)
+            name = os.path.splitext(os.path.basename(p))[0]
+            if len(name) > 30:
+                name = name[:29] + "…"
+            ctk.CTkLabel(row, text=f"{i + 1:02d}", width=26,
+                         font=ctk.CTkFont(size=11, weight="bold"),
+                         text_color=(ACCENT, "#c4b5fd")).pack(side="left")
+            ctk.CTkLabel(row, text=name, anchor="w",
+                         font=ctk.CTkFont(size=11)).pack(side="left", fill="x",
+                                                         expand=True)
+            for txt, cmd, ok in (("▲", lambda i=i: self._track_move(i, -1), i > 0),
+                                 ("▼", lambda i=i: self._track_move(i, 1), i < n - 1),
+                                 ("✕", lambda i=i: self._track_remove(i), True)):
+                ctk.CTkButton(row, text=txt, width=24, height=20, corner_radius=8,
+                              font=ctk.CTkFont(size=10),
+                              fg_color=("#e5e3db", "#242a33"),
+                              hover_color=("#d5d3cb", "#323a46"),
+                              text_color=("#111827", "#e5e7eb"),
+                              state="normal" if ok else "disabled",
+                              command=cmd).pack(side="left", padx=1)
+
+    def _apply_track_changes(self):
+        if self.audio_paths:
+            self.audio_zone.set_files(list(self.audio_paths))
+        else:
+            self.analysis = None
+            self._stop_sound()
+            self._pv_playing = False
+            self._pv_key = None
+            self.audio_zone.path = None
+            self.audio_zone.file_lbl.configure(
+                text="No file selected — click to browse", text_color=MUTED)
+            self.audio_zone.configure(border_color=CARD_BORDER)
+            self._refresh_track_rows()
+            self._update_tracklist_preview()
+            self._status("Tracklist cleared.")
+
+    def _track_move(self, i, delta):
+        j = i + delta
+        if 0 <= j < len(self.audio_paths):
+            self.audio_paths[i], self.audio_paths[j] = \
+                self.audio_paths[j], self.audio_paths[i]
+            self._apply_track_changes()
+
+    def _track_remove(self, i):
+        del self.audio_paths[i]
+        self._apply_track_changes()
+
+    def _tracks_add(self):
+        patterns = " ".join("*" + e for e in sorted(AUDIO_EXTS))
+        ps = filedialog.askopenfilenames(filetypes=[("Audio files", patterns)])
+        if ps:
+            self.audio_paths.extend(ps)
+            self._apply_track_changes()
+
+    def _tracks_clear(self):
+        self.audio_paths = []
+        self._apply_track_changes()
 
     def _analyze_worker(self, paths):
         try:

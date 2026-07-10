@@ -1349,10 +1349,196 @@ def get_active_track(tracks, current_time):
     return active_idx, title, sec, current_time - sec
 
 
-def draw_album_styles(frame, title, idx, all_tracks, style_name, elapsed_time, opts):
+# --------------------------------------------------------------------------
+# Playlist Cover (YouTube playlist-designer look)
+# --------------------------------------------------------------------------
+
+PLAYLIST_MAX_ROWS = 9
+
+# static layers are expensive (blur glow) but only change when the active
+# track changes, so cache a handful per process
+_PLAYLIST_CACHE = {}
+
+
+def _fmt_mmss(t):
+    t = max(0, int(t))
+    h, rem = divmod(t, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+
+
+def _playlist_geometry(size, n_rows):
+    w, h = size
+    row_h = max(18, int(h * 0.058))
+    y0 = int(h * 0.27)
+    x0 = int(w * 0.055)
+    panel_w = int(w * 0.54)
+    return x0, y0, panel_w, row_h
+
+
+def _build_playlist_layer(size, title, tracks, active_idx, win_start, theme,
+                          family, scale, total_dur):
+    """Static part of the playlist cover: neon glow title, stats row, and
+    the numbered tracklist with the active row highlighted."""
+    w, h = size
+    c1, c2 = THEMES.get(theme, THEMES["Neon Purple"])
+    layer = Image.new("RGBA", size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(layer, "RGBA")
+
+    # --- big neon title with a real blurred glow (auto-shrinks to fit) ---
+    if title:
+        px = max(16, int(h * 0.082 * scale))
+        te = TextEngine(px, title, family)
+        tw = te.width(title)
+        while tw > w * 0.94 and px > 12:
+            px = max(12, int(px * 0.92))
+            te = TextEngine(px, title, family)
+            tw = te.width(title)
+        x = int((w - tw) / 2)
+        y = int(h * 0.145)
+        glow = Image.new("RGBA", size, (0, 0, 0, 0))
+        te.draw(glow, (x, y), title, c1 + (255,))
+        glow = glow.filter(ImageFilter.GaussianBlur(max(4, px // 6)))
+        layer.alpha_composite(glow)
+        layer.alpha_composite(glow)          # double pass = stronger neon
+        te.draw(layer, (x, y), title, _lerp(c1, (255, 255, 255), 0.72) + (255,))
+
+    # --- stats row: N SONGS · TOTAL · YEAR (separator dots are drawn, not
+    # font glyphs — decorative fonts like Koulen have no bullet glyph) ---
+    import time as _time
+    segs = [f"{len(tracks)} SONGS", _fmt_mmss(total_dur),
+            str(_time.localtime().tm_year)]
+    spx = max(10, int(h * 0.024))
+    stes = [TextEngine(spx, s, family) for s in segs]
+    widths = [t.width(s) for t, s in zip(stes, segs)]
+    gap = spx * 2.2
+    total_w = sum(widths) + gap * (len(segs) - 1)
+    sx = (w - total_w) / 2
+    sy = int(h * 0.235)
+    dot_r = max(2, spx // 6)
+    for k, (t, s, sw_) in enumerate(zip(stes, segs, widths)):
+        t.draw(layer, (int(sx), sy), s, c2 + (225,))
+        sx += sw_
+        if k < len(segs) - 1:
+            cx = sx + gap / 2
+            cy = sy - spx * 0.32
+            draw.ellipse((cx - dot_r, cy - dot_r, cx + dot_r, cy + dot_r),
+                         fill=c2 + (200,))
+            sx += gap
+
+    # --- tracklist rows ---
+    x0, y0, panel_w, row_h = _playlist_geometry(size, len(tracks))
+    rows = tracks[win_start:win_start + PLAYLIST_MAX_ROWS]
+    rpx = max(11, int(row_h * 0.46))
+    active_rect = None
+    for r, (sec, ttl) in enumerate(rows):
+        gi = win_start + r
+        active = gi == active_idx
+        top = y0 + r * row_h
+        box = (x0, top, x0 + panel_w, top + row_h - max(4, row_h // 8))
+        radius = (box[3] - box[1]) // 2
+        rte = TextEngine(rpx, ttl, family)
+        baseline = int((box[1] + box[3]) / 2 + (rte.ascent - rte.descent) / 2)
+        time_lbl = _fmt_mmss(sec)
+        tte = TextEngine(max(9, int(rpx * 0.8)), time_lbl, family)
+        time_w = tte.width(time_lbl)
+        # truncate the song name to fit the pill (reserve room for the
+        # number, the play triangle on the active row, and the time label)
+        avail = panel_w - int(rpx * 5.4) - time_w
+        text = ttl
+        while text and rte.width(text) > avail:
+            text = text[:-1]
+        if text != ttl:
+            # don't end mid-cluster (dangling coeng/vowel renders a dotted
+            # circle) and use ASCII dots — decorative fonts lack the … glyph
+            while text and (0x17B4 <= ord(text[-1]) <= 0x17D3):
+                text = text[:-1]
+            text = text.rstrip() + ".."
+        text_x = x0 + int(rpx * 2.6)
+        if active:
+            active_rect = box
+            draw.rounded_rectangle(box, radius=radius, fill=c1 + (215,))
+            draw.rounded_rectangle(box, radius=radius,
+                                   outline=_lerp(c1, (255, 255, 255), 0.5) + (200,),
+                                   width=max(1, h // 400))
+            num_color, txt_color = (255, 255, 255, 255), (255, 255, 255, 255)
+            # play triangle drawn geometrically (decorative Khmer fonts have
+            # no ▶ glyph — a text prefix renders as a tofu box)
+            th = rpx * 0.62
+            ty = (box[1] + box[3]) / 2
+            draw.polygon([(text_x, ty - th / 2), (text_x, ty + th / 2),
+                          (text_x + th * 0.9, ty)], fill=(255, 255, 255, 240))
+            text_x += int(th * 1.5)
+        else:
+            draw.rounded_rectangle(box, radius=radius, fill=(10, 10, 18, 115))
+            num_color, txt_color = c1 + (200,), (232, 232, 238, 200)
+        nte = TextEngine(rpx, f"{gi + 1:02d}", family)
+        nte.draw(layer, (x0 + int(rpx * 0.9), baseline), f"{gi + 1:02d}", num_color)
+        rte2 = TextEngine(rpx, text, family)
+        rte2.draw(layer, (text_x, baseline), text, txt_color)
+        tte.draw(layer, (x0 + panel_w - time_w - int(rpx * 0.9),
+                         baseline - int(rpx * 0.08)), time_lbl,
+                 (200, 200, 210, 170) if not active else (255, 255, 255, 220))
+    return layer, active_rect
+
+
+def draw_playlist_cover(frame, idx, tracks, elapsed, opts, bass=0.0,
+                        total_dur=0.0):
+    """YouTube-playlist-cover overlay: neon title + numbered tracklist with a
+    beat-pulsing now-playing pill + stats row. Static parts are cached."""
+    size = frame.size
+    theme = opts.get("theme", "Neon Purple")
+    family = opts.get("title_font")
+    title = (opts.get("title_text") or "").strip()
+    scale = round(float(opts.get("title_scale", 1.0)), 2)
+    n = len(tracks)
+    win_start = 0
+    if n > PLAYLIST_MAX_ROWS:
+        win_start = max(0, min(idx - PLAYLIST_MAX_ROWS // 2,
+                               n - PLAYLIST_MAX_ROWS))
+    key = (size, title, tuple(t for _, t in tracks), idx, win_start, theme,
+           family, scale, int(total_dur))
+    cached = _PLAYLIST_CACHE.get(key)
+    if cached is None:
+        cached = _build_playlist_layer(size, title, tracks, idx, win_start,
+                                       theme, family, scale, total_dur)
+        if len(_PLAYLIST_CACHE) > 6:
+            _PLAYLIST_CACHE.clear()
+        _PLAYLIST_CACHE[key] = cached
+    layer, active_rect = cached
+    frame.paste(layer, (0, 0), layer)
+
+    draw = ImageDraw.Draw(frame, "RGBA")
+    c1, c2 = THEMES.get(theme, THEMES["Neon Purple"])
+    if active_rect:
+        # beat-pulsing glow ring around the now-playing pill
+        pad = max(2, int(frame.height * 0.004))
+        ring = (active_rect[0] - pad, active_rect[1] - pad,
+                active_rect[2] + pad, active_rect[3] + pad)
+        alpha = int(50 + 175 * max(0.0, min(1.0, bass)))
+        draw.rounded_rectangle(ring, radius=(ring[3] - ring[1]) // 2,
+                               outline=c2 + (alpha,),
+                               width=max(2, frame.height // 260))
+        # elapsed time of the current track, right of the pill
+        lbl = _fmt_mmss(elapsed)
+        px = max(10, int((active_rect[3] - active_rect[1]) * 0.55))
+        te = TextEngine(px, lbl)
+        te.draw(frame, (active_rect[2] + int(px * 0.7),
+                        int((active_rect[1] + active_rect[3]) / 2
+                            + (te.ascent - te.descent) / 2)),
+                lbl, c2 + (235,))
+
+
+def draw_album_styles(frame, title, idx, all_tracks, style_name, elapsed_time,
+                      opts, bass=0.0, total_dur=0.0):
     """
-    Dynamic track graphics router for all 10 selection variants.
+    Dynamic track graphics router for all selection variants.
     """
+    if "11. Playlist Cover" in style_name:
+        draw_playlist_cover(frame, idx, all_tracks, elapsed_time, opts,
+                            bass=bass, total_dur=total_dur)
+        return
+
     c1, c2 = THEMES.get(opts.get("theme", "Neon Purple"), THEMES["Neon Purple"])
     scale = float(opts.get("title_scale", 1.0))
     family = opts.get("title_font")
@@ -1567,7 +1753,8 @@ def compose_frame(assets, i, opts):
             if active_title:
                 draw_album_styles(frame, active_title, idx, tracks,
                                   opts.get("album_style", "1. Kinetic Slide-In"),
-                                  elapsed, opts)
+                                  elapsed, opts,
+                                  bass=float(an.bass[i]), total_dur=an.duration)
     elif opts.get("show_title"):
         title_text = opts.get("title_text", "")
         offset_x = 0

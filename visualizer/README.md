@@ -10,7 +10,13 @@ music-visualizer **MP4** — ready for YouTube, TikTok or Reels.
   on top, then tidy tab pages — 📁 Files / 🎨 Style / 🏷 Title / 💬 Subs /
   🎛 Studio / ✨ More — with a fixed ⚡ Create Video bar at the bottom
 - 💿 **Album Mode**: drop several songs, concatenated into one video with an
-  auto-calculated tracklist and 10 animated "now playing" indicators
+  auto-calculated tracklist and 11 animated "now playing" indicators —
+  including **Playlist Cover (YouTube)**: neon-glow title, numbered track
+  pills with a beat-pulsing highlight on the current song, per-track start
+  times, and a SONGS • DURATION • YEAR stats row
+- 📋 **Tracklist Manager** (Files tab): every dropped song listed with its
+  number — reorder (▲▼), remove (✕), ➕ Add Songs, 🗑 Clear All; the order
+  is the play order in the video
 - ⚡ **Fast export**: multi-core CPU rendering for long videos (memory-safe —
   the raw audio samples aren't copied to workers unless a waveform style
   needs them) and optional GPU encoding (NVENC / AMF / QSV) that probes the
