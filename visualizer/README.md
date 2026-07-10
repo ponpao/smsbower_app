@@ -8,7 +8,18 @@ music-visualizer **MP4** — ready for YouTube, TikTok or Reels.
 
 - 📱 **Compact modern UI** (450×840, like a phone app): live video preview
   on top, then tidy tab pages — 📁 Files / 🎨 Style / 🏷 Title / 💬 Subs /
-  ✨ More — with a fixed ⚡ Create Video bar at the bottom
+  🎛 Studio / ✨ More — with a fixed ⚡ Create Video bar at the bottom
+- 💿 **Album Mode**: drop several songs, concatenated into one video with an
+  auto-calculated tracklist and 10 animated "now playing" indicators
+- ⚡ **Fast export**: multi-core CPU rendering for long videos (memory-safe —
+  the raw audio samples aren't copied to workers unless a waveform style
+  needs them) and optional GPU encoding (NVENC / AMF / QSV) that probes the
+  encoder and falls back to libx264 automatically
+- 🎛 **Audio Studio** (real ffmpeg filters, applied on export): output
+  volume, bass boost, reverb, and enhancer presets (loudness normalize,
+  vocal presence, clarity, noise reduction)
+- 🎙 **Vocal Isolation** (real, instant): center-channel extraction from a
+  stereo song to clean the audio and improve Auto Captions accuracy
 
 - 🖱️ **Drag & drop** zones for image and audio (click-to-browse also works)
 - ▶️ **Live preview player** right in the app — play/pause, seek bar, with

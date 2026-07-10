@@ -353,11 +353,12 @@ class VisualizerFrame(ctk.CTkFrame):
         self._sound_ready = False
         self._seek_dragging = False
 
-        # AI Studio workshop parameters
+        # Audio Studio workshop parameters
         self.vocal_volume = 100.0
         self.bass_boost = 0.0
         self.reverb = 0.0
         self.enhancer = "Disable"
+        self.vocal_isolated_path = None   # set by the Vocal Isolation tool
 
         self._build_ui()
         self.after(66, self._preview_tick)
@@ -788,20 +789,20 @@ class VisualizerFrame(ctk.CTkFrame):
         card_splitter.pack(fill="x", padx=6, pady=(6, 6))
 
         # Title and description
-        ctk.CTkLabel(card_splitter, text="🎙️ AI Stem Splitter",
+        ctk.CTkLabel(card_splitter, text="🎙️ Vocal Isolation",
                      font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=14, pady=(12, 4))
-        
+
         ctk.CTkLabel(card_splitter,
-                     text="Isolate vocals from background music to improve transcription accuracy and clean up Khmer songs.",
+                     text="Extract center-channel vocals from a stereo song to clean up the audio and improve Auto Captions accuracy. (Fast, real ffmpeg DSP — not heavy AI separation.)",
                      font=ctk.CTkFont(size=11), text_color=MUTED,
-                     wraplength=420, justify="left").pack(anchor="w", padx=14, pady=(0, 10))
+                     wraplength=390, justify="left").pack(anchor="w", padx=14, pady=(0, 10))
 
         # Progress bar & status
         self.stem_progress_bar = ctk.CTkProgressBar(card_splitter, height=6, corner_radius=10, progress_color=ACCENT)
         self.stem_progress_bar.set(0)
         self.stem_progress_bar.pack(fill="x", padx=14, pady=(0, 4))
 
-        self.stem_status_lbl = ctk.CTkLabel(card_splitter, text="Status: Ready to split vocals",
+        self.stem_status_lbl = ctk.CTkLabel(card_splitter, text="Status: Ready to isolate vocals",
                                             font=ctk.CTkFont(size=11), text_color=MUTED)
         self.stem_status_lbl.pack(anchor="w", padx=14, pady=(0, 10))
 
@@ -819,7 +820,7 @@ class VisualizerFrame(ctk.CTkFrame):
                      font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=14, pady=(12, 10))
 
         # Vocal Volume Slider
-        self.vocal_vol_lbl = ctk.CTkLabel(card_workshop, text="Vocal Volume: 100%", font=ctk.CTkFont(size=11, weight="bold"))
+        self.vocal_vol_lbl = ctk.CTkLabel(card_workshop, text="Output Volume: 100%", font=ctk.CTkFont(size=11, weight="bold"))
         self.vocal_vol_lbl.pack(anchor="w", padx=14, pady=(4, 0))
         self.vocal_vol_slider = ctk.CTkSlider(card_workshop, from_=0, to=100, progress_color=ACCENT, button_color=ACCENT,
                                               command=self._on_vocal_vol_change)
@@ -855,7 +856,7 @@ class VisualizerFrame(ctk.CTkFrame):
 
     def _on_vocal_vol_change(self, val):
         self.vocal_volume = float(val)
-        self.vocal_vol_lbl.configure(text=f"Vocal Volume: {int(val)}%")
+        self.vocal_vol_lbl.configure(text=f"Output Volume: {int(val)}%")
 
     def _on_bass_boost_change(self, val):
         self.bass_boost = float(val)
@@ -872,22 +873,22 @@ class VisualizerFrame(ctk.CTkFrame):
         if not self.audio_paths:
             messagebox.showwarning("No Audio", "Please load an audio file first in the 'Files' tab.")
             return
+        src = self.audio_paths[0]
+        out_path = os.path.splitext(src)[0] + "_vocals.wav"
 
         self.stem_split_btn.configure(state="disabled")
-        self.stem_status_lbl.configure(text="Status: Initializing AI shaper...")
-        
+        self.stem_progress_bar.set(0.15)
+        self.stem_status_lbl.configure(text="Status: Isolating vocals…")
+
         def run():
-            steps = [
-                ("Status: Separating vocal frequencies...", 0.25),
-                ("Status: Filtering out instrumental tracks...", 0.50),
-                ("Status: Equalizing vocal clarity...", 0.75),
-                ("Status: Vocals isolated successfully!", 1.0)
-            ]
-            for msg, progress in steps:
-                time.sleep(1.2)
-                self.after(0, lambda m=msg, p=progress: self._update_stem_progress(m, p))
-            
-            self.after(0, self._on_stem_split_complete)
+            try:
+                engine.isolate_vocals(
+                    src, out_path,
+                    progress_cb=lambda m: self.after(0, self._update_stem_progress,
+                                                     "Status: " + m, 0.6))
+                self.after(0, self._on_stem_split_complete, out_path, None)
+            except Exception as exc:
+                self.after(0, self._on_stem_split_complete, None, str(exc))
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -895,9 +896,21 @@ class VisualizerFrame(ctk.CTkFrame):
         self.stem_status_lbl.configure(text=msg)
         self.stem_progress_bar.set(progress)
 
-    def _on_stem_split_complete(self):
+    def _on_stem_split_complete(self, out_path, error):
         self.stem_split_btn.configure(state="normal")
-        messagebox.showinfo("AI Stem Splitter", "AI Stem Splitting complete! Vocals isolated successfully for better subtitles.")
+        if error:
+            self.stem_progress_bar.set(0)
+            self.stem_status_lbl.configure(text="Status: Isolation failed.")
+            messagebox.showwarning("Vocal Isolation", error)
+            return
+        self.stem_progress_bar.set(1.0)
+        self.vocal_isolated_path = out_path
+        self.stem_status_lbl.configure(
+            text="Status: ✅ Vocals saved — will be used for Auto Captions.")
+        messagebox.showinfo(
+            "Vocal Isolation",
+            "Center-channel vocals isolated and saved to:\n" + out_path +
+            "\n\nAuto Captions will now transcribe from these cleaner vocals.")
 
     # ---- page: extras ----
 
@@ -1097,8 +1110,12 @@ class VisualizerFrame(ctk.CTkFrame):
                 if need_install:
                     engine.install_whisper(
                         progress_cb=lambda m: self.after(0, self._status, m))
+                # prefer isolated vocals (cleaner) when the user made them
+                trans_src = self.audio_paths[0]
+                if self.vocal_isolated_path and os.path.exists(self.vocal_isolated_path):
+                    trans_src = self.vocal_isolated_path
                 subs = engine.transcribe(
-                    self.audio_paths[0], language=lang, model_size=model,
+                    trans_src, language=lang, model_size=model,
                     progress_cb=lambda m: self.after(0, self._status, "🎙 " + m))
                 self.after(0, self._on_subs_ready, subs)
             except ImportError as exc:
@@ -1196,6 +1213,11 @@ class VisualizerFrame(ctk.CTkFrame):
             "use_tracklist": self.use_album_tracklist.get(),
             "album_style": self.album_style.get(),
             "track_timeline": self.cached_tracklist,
+            # Audio Studio controls -> real ffmpeg audio filters on export
+            "vocal_volume": self.vocal_volume,
+            "bass_boost": self.bass_boost,
+            "reverb": self.reverb,
+            "enhancer": self.enhancer,
         }
 
     # ---------------- live preview ----------------

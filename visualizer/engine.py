@@ -21,6 +21,7 @@ import os
 import re
 import subprocess
 import sys
+import traceback
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -283,8 +284,16 @@ def khmer_shaping_mode():
                  font load in _try_font)
     "none"     — neither available: ជើង/ស្រៈ would render scrambled
     """
-    if khmer_shaper_available() and resolve_khmer_font_path()[0]:
-        return "harfbuzz"
+    if khmer_shaper_available():
+        path, vf = resolve_khmer_font_path()
+        if path:
+            try:
+                _HBFont.get(path, 24, True, vf)   # real init, not just import
+                return "harfbuzz"
+            except Exception:
+                print("[visualizer] HarfBuzz shaper init failed:",
+                      file=sys.stderr)
+                traceback.print_exc()
     if raqm_available():
         return "raqm"
     return "none"
@@ -364,6 +373,31 @@ def resolve_khmer_font_path(family=None, bold=True):
     return None, False
 
 
+def _force_buffer(buf, *, script, direction, language):
+    """Set script/direction/language on a HarfBuzz buffer, tolerant of the
+    binding's API: uharfbuzz uses properties, some builds expose setter
+    methods. Any leftover fields are filled by guess_segment_properties()."""
+    for attr, value, setter in (
+        ("script", script, "set_script"),
+        ("direction", direction, "set_direction"),
+        ("language", language, "set_language"),
+    ):
+        try:
+            method = getattr(buf, setter, None)
+            if callable(method):
+                method(value)
+            else:
+                setattr(buf, attr, value)
+        except Exception:
+            pass
+    # backfill anything the binding left unset; HarfBuzz only fills fields
+    # that are still unset, so the forced Khmr script is preserved
+    try:
+        buf.guess_segment_properties()
+    except Exception:
+        pass
+
+
 class _HBFont:
     """HarfBuzz shaping + FreeType rasterizing for one (font, px, bold).
 
@@ -393,28 +427,38 @@ class _HBFont:
                 self.ft.set_var_design_coords((100.0, 700.0))  # wdth, wght
             except Exception:
                 pass
-        try:
-            self.ascent = self.ft.size.metrics.ascender / 64.0
-            self.descent = -self.ft.size.metrics.descender / 64.0
-        except AttributeError:
-            self.ascent = self.ft.size.ascender / 64.0
-            self.descent = -self.ft.size.descender / 64.0
+        self.ascent, self.descent = self._scaled_metrics(px)
         self._mask_cache = {}
+
+    def _scaled_metrics(self, px):
+        """Pixel ascent/descent, robust across freetype-py versions.
+
+        freetype-py's Face.size returns SizeMetrics directly (has
+        .ascender); other bindings expose it as .size.metrics.ascender.
+        Last resort: scale the face's font-unit metrics ourselves.
+        """
+        size = self.ft.size
+        for obj in (size, getattr(size, "metrics", None)):
+            if obj is None:
+                continue
+            try:
+                return obj.ascender / 64.0, -obj.descender / 64.0
+            except AttributeError:
+                continue
+        upem = self.ft.units_per_EM or 1000
+        return (px * self.ft.ascender / upem, -px * self.ft.descender / upem)
 
     def shape(self, text):
         import uharfbuzz as hb
         buf = hb.Buffer()
         buf.add_str(text)
-        buf.guess_segment_properties()
-        if any(3968 <= ord(c) <= 4095 for c in text) or text_has_khmer(text):
-            try:
-                buf.set_script('Khmr')
-                buf.set_direction('ltr')
-                buf.set_language('km')
-            except AttributeError:
-                buf.script = 'Khmr'
-                buf.direction = 'ltr'
-                buf.language = 'km'
+        if text_has_khmer(text):
+            # Force Khmer shaping so ជើង (subscripts) and pre-base vowels are
+            # reordered correctly. guess_segment_properties() alone leaves the
+            # language at the machine locale, which can misfire on Windows.
+            _force_buffer(buf, script="Khmr", direction="ltr", language="km")
+        else:
+            buf.guess_segment_properties()
         hb.shape(self.hb_font, buf)
         glyphs, pen = [], 0.0
         for info, pos in zip(buf.glyph_infos, buf.glyph_positions):
@@ -615,6 +659,45 @@ def install_whisper(progress_cb=None):
 def install_khmer_shaper(progress_cb=None):
     """Install the HarfBuzz Khmer shaper (one-click fix for broken ជើង)."""
     _pip_install(["uharfbuzz", "freetype-py"], progress_cb, "Khmer shaper")
+
+
+def _audio_is_stereo(path):
+    r = subprocess.run([ffmpeg_exe(), "-hide_banner", "-i", path],
+                       capture_output=True, text=True, creationflags=_no_window())
+    for line in r.stderr.splitlines():
+        if "Audio:" in line:
+            return any(tag in line for tag in ("stereo", "5.1", "quad", "7.1"))
+    return False
+
+
+def isolate_vocals(path, out_path, progress_cb=None):
+    """Real, lightweight vocal isolation via ffmpeg center-channel extraction.
+
+    Vocals are usually mixed to the center, so the mid signal (L+R)/2 keeps
+    them while hard-panned instruments cancel; a vocal-band band-pass then
+    trims low rumble and high hiss. Not studio-grade AI separation, but a
+    genuine, instant improvement — great for cleaning audio before Auto
+    Captions. Returns out_path. Raises with a clear message on mono input.
+    """
+    if progress_cb:
+        progress_cb("Analyzing channels…")
+    if not _audio_is_stereo(path):
+        raise RuntimeError(
+            "This track is mono — center-channel isolation needs a stereo file.\n"
+            "Tip: export the song in stereo, or use a full AI separator (demucs)."
+        )
+    if progress_cb:
+        progress_cb("Isolating center-channel vocals…")
+    af = "pan=mono|c0=0.5*c0+0.5*c1,highpass=f=150,lowpass=f=10000,dynaudnorm"
+    cmd = [ffmpeg_exe(), "-y", "-v", "error", "-i", path, "-af", af,
+           "-ac", "1", out_path]
+    proc = subprocess.run(cmd, capture_output=True, creationflags=_no_window())
+    if proc.returncode != 0 or not os.path.exists(out_path):
+        raise RuntimeError("Vocal isolation failed:\n"
+                           + proc.stderr.decode(errors="replace")[-300:])
+    if progress_cb:
+        progress_cb("Vocals isolated.")
+    return out_path
 
 
 def transcribe(audio_path, language=None, model_size="small", progress_cb=None):
@@ -1062,6 +1145,9 @@ STYLE_FUNCS = {
 
 STYLES = list(STYLE_FUNCS)
 NEEDS_CENTER_ART = {"Circular Spectrum", "Circular Wave", "Pulse Rings"}
+# Only these styles read the raw per-sample waveform; for everything else the
+# huge samples array can be dropped before shipping assets to worker processes.
+NEEDS_SAMPLES = {"Waveform", "Dual Wave"}
 
 
 def draw_style(frame, style, an, i, c1, c2, center_art=None, custom=None):
@@ -1529,6 +1615,74 @@ def compose_frame(assets, i, opts):
 
 
 # --------------------------------------------------------------------------
+# Audio processing (Studio controls) + video codec selection
+# --------------------------------------------------------------------------
+
+# Enhancer preset -> extra ffmpeg audio filter. Keys match the UI menu.
+ENHANCER_FILTERS = {
+    "Disable": None,
+    "Pro Vocal Boost": "equalizer=f=3000:t=q:w=1.5:g=4",
+    "Clear Clear": "equalizer=f=8000:t=q:w=2:g=3",
+    "Loudness Normalize": "loudnorm=I=-14:TP=-1.5:LRA=11",
+    "Noise Cancel": "highpass=f=80,afftdn=nf=-25",
+}
+
+
+def build_audio_filters(opts, duration):
+    """ffmpeg -af chain from the Studio controls + fade.
+
+    Note: without stem separation "volume" scales the whole mix, so it is
+    the overall output level, not vocals-only.
+    """
+    filters = []
+    vol = float(opts.get("vocal_volume", 100)) / 100.0
+    if abs(vol - 1.0) > 0.01:
+        filters.append(f"volume={vol:.3f}")
+    bass = float(opts.get("bass_boost", 0))
+    if bass > 0:
+        filters.append(f"bass=g={bass / 100.0 * 15.0:.1f}:f=110:w=0.6")
+    reverb = float(opts.get("reverb", 0))
+    if reverb > 0:
+        d = reverb / 100.0
+        filters.append(
+            f"aecho=0.8:{0.6 + 0.3 * d:.2f}:{int(40 + 60 * d)}:{0.3 + 0.4 * d:.2f}")
+    enh = ENHANCER_FILTERS.get(opts.get("enhancer", "Disable"))
+    if enh:
+        filters.append(enh)
+    if opts.get("fade"):
+        fade_out = max(0.0, duration - 1.0)
+        filters.append("afade=t=in:st=0:d=1")
+        filters.append(f"afade=t=out:st={fade_out:.2f}:d=1")
+    return filters
+
+
+def _encoder_works(name):
+    """Actually run the encoder on a tiny frame — listing it in -encoders
+    does not mean the driver/hardware is present at runtime."""
+    try:
+        r = subprocess.run(
+            [ffmpeg_exe(), "-hide_banner", "-f", "lavfi",
+             "-i", "nullsrc=s=64x64:d=0.1", "-c:v", name, "-f", "null", "-"],
+            capture_output=True, creationflags=_no_window())
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def pick_video_codec(use_gpu):
+    """(codec, extra_opts). Falls back to libx264 when no GPU encoder works."""
+    if use_gpu:
+        for name, gpu_opts in (
+            ("h264_nvenc", ["-preset", "fast", "-b:v", "12M"]),
+            ("h264_amf", ["-b:v", "12M"]),
+            ("h264_qsv", ["-b:v", "12M"]),
+        ):
+            if _encoder_works(name):
+                return name, gpu_opts
+    return "libx264", ["-preset", "fast", "-crf", "18"]
+
+
+# --------------------------------------------------------------------------
 # Multi-Core CPU Rendering Workers
 # --------------------------------------------------------------------------
 
@@ -1536,10 +1690,55 @@ _worker_assets = None
 _worker_opts = None
 
 
+# Frame count below which multiprocessing isn't worth the spawn overhead.
+PARALLEL_MIN_FRAMES = 300
+
+
 def _init_worker(assets, opts):
     global _worker_assets, _worker_opts
     _worker_assets = assets
     _worker_opts = opts
+
+
+def _worker_payload(assets, opts, an):
+    """Trim what gets pickled to each worker process.
+
+    Drops the (potentially album-sized) raw samples array unless a
+    waveform style needs it, and removes the pre-computed _analysis so the
+    big object isn't shipped twice.
+    """
+    import dataclasses
+    wopts = {k: v for k, v in opts.items() if k != "_analysis"}
+    if opts.get("style") not in NEEDS_SAMPLES and getattr(an, "samples", None) is not None \
+            and an.samples.size:
+        light_an = dataclasses.replace(an, samples=np.empty(0, dtype=np.float32))
+        assets = dataclasses.replace(assets, an=light_an)
+    return assets, wopts
+
+
+def _generate_frames(assets, opts, an, cancel_event, use_parallel):
+    """Yield (frame_index, rgb_bytes) in order, in-process or across CPUs."""
+    if use_parallel:
+        wassets, wopts = _worker_payload(assets, opts, an)
+        workers = min(8, max(1, os.cpu_count() or 2))
+        chunk = max(1, an.num_frames // (workers * 4))
+        executor = concurrent.futures.ProcessPoolExecutor(
+            max_workers=workers, initializer=_init_worker, initargs=(wassets, wopts))
+        try:
+            for i, res in executor.map(_draw_frame_worker, range(an.num_frames),
+                                       chunksize=chunk):
+                if isinstance(res, Exception):
+                    raise res
+                if cancel_event is not None and cancel_event.is_set():
+                    raise InterruptedError("cancelled")
+                yield i, res
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+    else:
+        for i in range(an.num_frames):
+            if cancel_event is not None and cancel_event.is_set():
+                raise InterruptedError("cancelled")
+            yield i, compose_frame(assets, i, opts).tobytes()
 
 
 def _draw_frame_worker(i):
@@ -1569,24 +1768,9 @@ def render_video(image_path, audio_path, out_path, opts,
     assets = prepare_assets(image_path, an, size, opts)
 
     w, h = size
-    v_codec = "libx264"
-    v_opts = ["-preset", "fast", "-crf", "18"]
-
-    if opts.get("use_gpu"):
-        try:
-            res = subprocess.run([ffmpeg_exe(), "-encoders"], capture_output=True, creationflags=_no_window())
-            encoders_out = res.stdout.decode(errors="replace") if res.stdout else ""
-            if "h264_nvenc" in encoders_out:
-                v_codec = "h264_nvenc"
-                v_opts = ["-preset", "fast", "-b:v", "12M"]
-            elif "h264_amf" in encoders_out:
-                v_codec = "h264_amf"
-                v_opts = ["-b:v", "12M"]
-            elif "h264_qsv" in encoders_out:
-                v_codec = "h264_qsv"
-                v_opts = ["-b:v", "12M"]
-        except Exception:
-            pass
+    v_codec, v_opts = pick_video_codec(opts.get("use_gpu"))
+    audio_filters = build_audio_filters(opts, an.duration)
+    use_parallel = an.num_frames >= PARALLEL_MIN_FRAMES and (os.cpu_count() or 1) > 1
 
     temp_concat_file = None
     try:
@@ -1616,51 +1800,42 @@ def render_video(image_path, audio_path, out_path, opts,
             "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "192k",
         ]
-        if opts.get("fade"):
-            fade_out = max(0.0, an.duration - 1.0)
-            cmd += ["-af", f"afade=t=in:st=0:d=1,afade=t=out:st={fade_out:.2f}:d=1"]
+        if audio_filters:
+            cmd += ["-af", ",".join(audio_filters)]
         cmd += ["-shortest", "-movflags", "+faststart", out_path]
 
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE,
                                 creationflags=_no_window())
-        
-        # Start a thread to read stderr to prevent deadlock
+
+        # Drain stderr on a thread so ffmpeg never blocks on a full pipe
         import threading
         ffmpeg_stderr_lines = []
+
         def log_ffmpeg_stderr():
             try:
                 for line in proc.stderr:
                     ffmpeg_stderr_lines.append(line)
             except Exception:
                 pass
+
         ffmpeg_stderr_thread = threading.Thread(target=log_ffmpeg_stderr, daemon=True)
         ffmpeg_stderr_thread.start()
 
+        gen = None
         try:
-            num_workers = min(61, max(1, multiprocessing.cpu_count() or 4))
-            chunksize = max(1, an.num_frames // (num_workers * 4))
-
-            with concurrent.futures.ProcessPoolExecutor(
-                max_workers=num_workers,
-                initializer=_init_worker,
-                initargs=(assets, opts)
-            ) as executor:
-                results = executor.map(_draw_frame_worker, range(an.num_frames), chunksize=chunksize)
-
-                for i, res in results:
-                    if isinstance(res, Exception):
-                        raise res
-                    if cancel_event is not None and cancel_event.is_set():
-                        raise InterruptedError("cancelled")
-                    proc.stdin.write(res)
-                    if progress_cb and (i % 5 == 0 or i == an.num_frames - 1):
-                        progress_cb(i + 1, an.num_frames)
+            gen = _generate_frames(assets, opts, an, cancel_event, use_parallel)
+            for i, res in gen:
+                proc.stdin.write(res)
+                if progress_cb and (i % 5 == 0 or i == an.num_frames - 1):
+                    progress_cb(i + 1, an.num_frames)
             proc.stdin.close()
             ffmpeg_stderr_thread.join(timeout=2.0)
             err = b"".join(ffmpeg_stderr_lines).decode(errors="replace")
             if proc.wait() != 0:
                 raise RuntimeError("ffmpeg encoding failed:\n" + err[-400:])
         except BaseException:
+            if gen is not None:
+                gen.close()          # shuts the worker pool down
             try:
                 proc.stdin.close()
             except Exception:

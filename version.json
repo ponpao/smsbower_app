@@ -1,10 +1,12 @@
 {
-  "version": "3.5.2",
+  "version": "3.6.0",
   "release_date": "2026-07-02",
-  "download_url": "https://github.com/ponpao/smsbower_app/releases/download/V3.5.2/TRAVKOD.CODEs.3.5.2.exe",
+  "download_url": "https://github.com/ponpao/smsbower_app/releases/download/V3.6.0/TRAVKOD.CODEs.3.6.0.exe",
   "changelog": [
-    "Visualizer: ជួសជុល HarfBuzz shaper — អាន font metrics បានគ្រប់ version របស់ freetype-py (ការពារ AttributeError លើ Windows)",
-    "Visualizer: បង្ខំ Khmer shaping (script=Khmr) អោយ ជើង/ស្រៈ ត្រឹមត្រូវ ដោយមិនអាស្រ័យ locale",
-    "Visualizer: បើ HarfBuzz init បរាជ័យ បង្ហាញ error ក្នុង log (លែងស្ងាត់)"
+    "Visualizer: Album Mode — ដាក់ចម្រៀងច្រើន ភ្ជាប់ជាវីដេអូតែមួយ ជាមួយ Tracklist និង Track Indicator 10 បែប",
+    "Visualizer: Render លឿនជាងមុន (Multi-core CPU) និង GPU encoding (NVENC/AMF/QSV) មាន fallback ស្វ័យប្រវត្តិ",
+    "Visualizer: Audio Studio ដំណើរការពិត — Output Volume, Bass Boost, Reverb, Enhancer (ffmpeg filters)",
+    "Visualizer: Vocal Isolation ពិត (center-channel) ជំនួស Stem Splitter ក្លែងក្លាយ — ជួយ Auto Captions",
+    "Visualizer: បង្រួម RAM ពេល render album (មិន copy samples ច្រើនទៅ workers) និង HarfBuzz Khmer រឹងមាំ"
   ]
 }
