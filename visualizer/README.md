@@ -26,6 +26,16 @@ music-visualizer **MP4** — ready for YouTube, TikTok or Reels.
   vocal presence, clarity, noise reduction)
 - 🎙 **Vocal Isolation** (real, instant): center-channel extraction from a
   stereo song to clean the audio and improve Auto Captions accuracy
+- 🎚 **Mix Master presets** (Studio tab): streaming-ready mastering chains —
+  YouTube Loud, Warm Analog, Club Bass, Crystal Clear (compressor → EQ →
+  loudness → limiter, exported at 256k audio)
+- 🌟 **Video Effects** (More tab): Snow Fall, Fireflies (slow floating
+  glow), Neon Dust, Rising Sparks, Bokeh Lights — deterministic particles
+  with an intensity slider, beat-reactive, ~0.3 ms/frame
+- 🖼 Watermark now has a ✕ remove button; Playlist Cover comes in 4
+  layouts (Left / Center Stack / Right Panel / Glass Minimal)
+- ⚡ **Smooth UI**: preview frames render on a background thread, so
+  buttons, sliders and tab switches never stutter while the preview plays
 
 - 🖱️ **Drag & drop** zones for image and audio (click-to-browse also works)
 - ▶️ **Live preview player** right in the app — play/pause, seek bar, with

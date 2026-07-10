@@ -1353,7 +1353,105 @@ def get_active_track(tracks, current_time):
 # Playlist Cover (YouTube playlist-designer look)
 # --------------------------------------------------------------------------
 
+# --------------------------------------------------------------------------
+# Video particle effects (deterministic per frame -> seekable + worker-safe)
+# --------------------------------------------------------------------------
+
+EFFECTS = ["None", "Snow Fall", "Fireflies", "Neon Dust", "Rising Sparks",
+           "Bokeh Lights"]
+
+
+def _prand(i, salt=0.0):
+    """Stable pseudo-random 0..1 per particle index (no state between
+    frames, so parallel workers and preview seeking stay consistent)."""
+    return (math.sin(i * 12.9898 + salt * 78.233) * 43758.5453) % 1.0
+
+
+def draw_effect(frame, effect, t, intensity, c1, c2, bass=0.0):
+    """Overlay particles. `t` in seconds; intensity 0..100."""
+    if not effect or effect == "None":
+        return
+    w, h = frame.size
+    draw = ImageDraw.Draw(frame, "RGBA")
+    n = int(18 + intensity * 1.1)
+    unit = h / 540.0
+
+    if effect == "Snow Fall":
+        for i in range(n):
+            spd = 0.05 + 0.11 * _prand(i, 3.3)
+            y = ((_prand(i, 9.1) + t * spd) % 1.08) - 0.04
+            x = (_prand(i, 1.7) + 0.025 * math.sin(t * (0.4 + _prand(i, 2.2)) + i)) % 1.0
+            r = (1.0 + 2.6 * _prand(i, 5.5)) * unit
+            alpha = int(110 + 110 * _prand(i, 7.7))
+            px, py = x * w, y * h
+            draw.ellipse((px - r, py - r, px + r, py + r),
+                         fill=(255, 255, 255, alpha))
+
+    elif effect == "Fireflies":
+        for i in range(max(8, n // 2)):
+            sp1, sp2 = 0.12 + 0.2 * _prand(i, 4.4), 0.1 + 0.16 * _prand(i, 6.6)
+            x = (_prand(i, 1.1) + 0.06 * math.sin(t * sp1 + i * 2.1)) % 1.0
+            y = (_prand(i, 2.9) + 0.05 * math.sin(t * sp2 + i * 4.7)
+                 - t * 0.008) % 1.0
+            pulse = 0.5 + 0.5 * math.sin(t * (0.8 + _prand(i, 8.8)) + i * 2.6)
+            r = (1.4 + 2.0 * _prand(i, 5.2)) * unit
+            px, py = x * w, y * h
+            core = (255, 228, 140)
+            draw.ellipse((px - r * 3, py - r * 3, px + r * 3, py + r * 3),
+                         fill=core + (int(14 + 40 * pulse),))
+            draw.ellipse((px - r, py - r, px + r, py + r),
+                         fill=core + (int(90 + 150 * pulse),))
+
+    elif effect == "Neon Dust":
+        for i in range(n):
+            spd = 0.015 + 0.03 * _prand(i, 3.9)
+            y = ((_prand(i, 8.2) - t * spd) % 1.06) - 0.03
+            x = (_prand(i, 1.3) + 0.012 * math.sin(t * 0.7 + i)) % 1.0
+            twinkle = 0.4 + 0.6 * abs(math.sin(t * (1.2 + _prand(i, 6.1)) + i))
+            r = (0.6 + 1.4 * _prand(i, 5.9)) * unit
+            color = _lerp(c1, c2, _prand(i, 7.3))
+            px, py = x * w, y * h
+            draw.ellipse((px - r, py - r, px + r, py + r),
+                         fill=color + (int(70 + 160 * twinkle * (0.6 + 0.4 * bass)),))
+
+    elif effect == "Rising Sparks":
+        for i in range(n):
+            spd = 0.10 + 0.22 * _prand(i, 3.1)
+            life = (_prand(i, 9.7) + t * spd) % 1.0
+            y = 1.05 - life * 1.1
+            x = (_prand(i, 1.9) + 0.02 * math.sin(t * 3.0 + i * 1.7)) % 1.0
+            flicker = 0.55 + 0.45 * math.sin(t * 16 + i * 3.3)
+            fade = max(0.0, 1.0 - life * 1.1)
+            r = (0.7 + 1.6 * _prand(i, 4.8)) * unit
+            color = _lerp(c1, c2, life)
+            px, py = x * w, y * h
+            draw.ellipse((px - r, py - r, px + r, py + r),
+                         fill=color + (int(230 * fade * flicker),))
+
+    elif effect == "Bokeh Lights":
+        for i in range(max(5, n // 6)):
+            x = (_prand(i, 1.5) + 0.03 * math.sin(t * 0.15 + i * 2.2)) % 1.0
+            y = (_prand(i, 3.7) + 0.025 * math.sin(t * 0.11 + i * 1.4)) % 1.0
+            pulse = 0.5 + 0.5 * math.sin(t * (0.3 + 0.3 * _prand(i, 6.3)) + i)
+            r = (10 + 26 * _prand(i, 5.1)) * unit
+            color = _lerp(c1, c2, _prand(i, 7.9))
+            px, py = x * w, y * h
+            a = int(10 + 26 * pulse)
+            for k, f in ((1.0, a), (0.72, int(a * 1.5)), (0.4, int(a * 2.2))):
+                rr = r * k
+                draw.ellipse((px - rr, py - rr, px + rr, py + rr),
+                             fill=color + (min(255, f),))
+
+
 PLAYLIST_MAX_ROWS = 9
+
+# Playlist Cover layout variants (menu prefix -> config)
+PLAYLIST_VARIANTS = {
+    "11.": {"align": "left", "glass": False},
+    "12.": {"align": "center", "glass": False},
+    "13.": {"align": "right", "glass": False},
+    "14.": {"align": "center", "glass": True},
+}
 
 # static layers are expensive (blur glow) but only change when the active
 # track changes, so cache a handful per process
@@ -1367,17 +1465,23 @@ def _fmt_mmss(t):
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
 
 
-def _playlist_geometry(size, n_rows):
+def _playlist_geometry(size, variant):
     w, h = size
     row_h = max(18, int(h * 0.058))
     y0 = int(h * 0.27)
-    x0 = int(w * 0.055)
-    panel_w = int(w * 0.54)
+    panel_w = int(w * (0.62 if variant.get("align") == "center" else 0.54))
+    align = variant.get("align", "left")
+    if align == "center":
+        x0 = int((w - panel_w) / 2)
+    elif align == "right":
+        x0 = int(w - panel_w - w * 0.055)
+    else:
+        x0 = int(w * 0.055)
     return x0, y0, panel_w, row_h
 
 
 def _build_playlist_layer(size, title, tracks, active_idx, win_start, theme,
-                          family, scale, total_dur):
+                          family, scale, total_dur, variant):
     """Static part of the playlist cover: neon glow title, stats row, and
     the numbered tracklist with the active row highlighted."""
     w, h = size
@@ -1427,7 +1531,8 @@ def _build_playlist_layer(size, title, tracks, active_idx, win_start, theme,
             sx += gap
 
     # --- tracklist rows ---
-    x0, y0, panel_w, row_h = _playlist_geometry(size, len(tracks))
+    x0, y0, panel_w, row_h = _playlist_geometry(size, variant)
+    glass = variant.get("glass", False)
     rows = tracks[win_start:win_start + PLAYLIST_MAX_ROWS]
     rpx = max(11, int(row_h * 0.46))
     active_rect = None
@@ -1469,6 +1574,13 @@ def _build_playlist_layer(size, title, tracks, active_idx, win_start, theme,
             draw.polygon([(text_x, ty - th / 2), (text_x, ty + th / 2),
                           (text_x + th * 0.9, ty)], fill=(255, 255, 255, 240))
             text_x += int(th * 1.5)
+        elif glass:
+            # frosted-glass pills: translucent white with a light border
+            draw.rounded_rectangle(box, radius=radius, fill=(255, 255, 255, 30))
+            draw.rounded_rectangle(box, radius=radius,
+                                   outline=(255, 255, 255, 70),
+                                   width=max(1, h // 500))
+            num_color, txt_color = (255, 255, 255, 235), (248, 248, 252, 225)
         else:
             draw.rounded_rectangle(box, radius=radius, fill=(10, 10, 18, 115))
             num_color, txt_color = c1 + (200,), (232, 232, 238, 200)
@@ -1483,9 +1595,11 @@ def _build_playlist_layer(size, title, tracks, active_idx, win_start, theme,
 
 
 def draw_playlist_cover(frame, idx, tracks, elapsed, opts, bass=0.0,
-                        total_dur=0.0):
+                        total_dur=0.0, variant=None):
     """YouTube-playlist-cover overlay: neon title + numbered tracklist with a
     beat-pulsing now-playing pill + stats row. Static parts are cached."""
+    if variant is None:
+        variant = PLAYLIST_VARIANTS["11."]
     size = frame.size
     theme = opts.get("theme", "Neon Purple")
     family = opts.get("title_font")
@@ -1497,11 +1611,12 @@ def draw_playlist_cover(frame, idx, tracks, elapsed, opts, bass=0.0,
         win_start = max(0, min(idx - PLAYLIST_MAX_ROWS // 2,
                                n - PLAYLIST_MAX_ROWS))
     key = (size, title, tuple(t for _, t in tracks), idx, win_start, theme,
-           family, scale, int(total_dur))
+           family, scale, int(total_dur),
+           variant.get("align"), variant.get("glass"))
     cached = _PLAYLIST_CACHE.get(key)
     if cached is None:
         cached = _build_playlist_layer(size, title, tracks, idx, win_start,
-                                       theme, family, scale, total_dur)
+                                       theme, family, scale, total_dur, variant)
         if len(_PLAYLIST_CACHE) > 6:
             _PLAYLIST_CACHE.clear()
         _PLAYLIST_CACHE[key] = cached
@@ -1534,9 +1649,12 @@ def draw_album_styles(frame, title, idx, all_tracks, style_name, elapsed_time,
     """
     Dynamic track graphics router for all selection variants.
     """
-    if "11. Playlist Cover" in style_name:
+    if "Playlist" in style_name:
+        variant = next((cfg for pre, cfg in PLAYLIST_VARIANTS.items()
+                        if style_name.startswith(pre)),
+                       PLAYLIST_VARIANTS["11."])
         draw_playlist_cover(frame, idx, all_tracks, elapsed_time, opts,
-                            bass=bass, total_dur=total_dur)
+                            bass=bass, total_dur=total_dur, variant=variant)
         return
 
     c1, c2 = THEMES.get(opts.get("theme", "Neon Purple"), THEMES["Neon Purple"])
@@ -1741,6 +1859,14 @@ def compose_frame(assets, i, opts):
                    assets.center_art, opts.get("custom"))
 
     t = i / an.fps
+
+    # particle effects float over the art + visualizer, under the text
+    effect = opts.get("effect")
+    if effect and effect != "None":
+        draw_effect(frame, effect, t,
+                    float(opts.get("effect_intensity", 50)),
+                    c1, c2, bass=float(an.bass[i]))
+
     if opts.get("use_tracklist") and opts.get("audio_paths"):
         tracks = opts.get("track_timeline")
         if tracks is None:
@@ -1814,6 +1940,22 @@ ENHANCER_FILTERS = {
     "Noise Cancel": "highpass=f=80,afftdn=nf=-25",
 }
 
+# Mix-Master presets: compressor -> tone shaping -> loudness -> limiter,
+# like a streaming-ready mastering chain. Keys match the UI menu.
+MASTER_PRESETS = {
+    "Off": None,
+    "YouTube Loud": ("acompressor=threshold=-18dB:ratio=3:attack=20:release=250:makeup=4,"
+                     "loudnorm=I=-14:TP=-1.0:LRA=11,alimiter=limit=0.97"),
+    "Warm Analog": ("bass=g=2.5:f=120,treble=g=-1.5:f=9000,"
+                    "acompressor=threshold=-20dB:ratio=2:attack=25:release=300:makeup=3,"
+                    "alimiter=limit=0.95"),
+    "Club Bass": ("bass=g=6:f=90:w=0.5,"
+                  "acompressor=threshold=-16dB:ratio=4:attack=10:release=180:makeup=5,"
+                  "alimiter=limit=0.97"),
+    "Crystal Clear": ("treble=g=3:f=8500,equalizer=f=250:t=q:w=1:g=-2,"
+                      "loudnorm=I=-14:TP=-1.5:LRA=11,alimiter=limit=0.97"),
+}
+
 
 def build_audio_filters(opts, duration):
     """ffmpeg -af chain from the Studio controls + fade.
@@ -1836,6 +1978,10 @@ def build_audio_filters(opts, duration):
     enh = ENHANCER_FILTERS.get(opts.get("enhancer", "Disable"))
     if enh:
         filters.append(enh)
+    master = MASTER_PRESETS.get(opts.get("master", "Off"))
+    if master:
+        # loudnorm runs internally at 192 kHz — pin the output rate back
+        filters.append(master + ",aresample=44100")
     if opts.get("fade"):
         fade_out = max(0.0, duration - 1.0)
         filters.append("afade=t=in:st=0:d=1")
@@ -1980,12 +2126,13 @@ def render_video(image_path, audio_path, out_path, opts,
         else:
             cmd += ["-i", audio_paths[0]]
 
+        a_bitrate = "256k" if MASTER_PRESETS.get(opts.get("master", "Off")) else "192k"
         cmd += [
             "-map", "0:v:0", "-map", "1:a:0",
             "-c:v", v_codec,
         ] + v_opts + [
             "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-b:a", "192k",
+            "-c:a", "aac", "-b:a", a_bitrate,
         ]
         if audio_filters:
             cmd += ["-af", ",".join(audio_filters)]

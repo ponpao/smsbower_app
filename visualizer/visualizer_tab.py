@@ -349,6 +349,7 @@ class VisualizerFrame(ctk.CTkFrame):
         self._pv_last_tick = None
         self._pv_last_opts = None
         self._pv_last_t = None
+        self._pv_busy = False
         self._pv_photo = None
         self._sound_ready = False
         self._seek_dragging = False
@@ -358,6 +359,7 @@ class VisualizerFrame(ctk.CTkFrame):
         self.bass_boost = 0.0
         self.reverb = 0.0
         self.enhancer = "Disable"
+        self.master_preset = "Off"
         self.vocal_isolated_path = None   # set by the Vocal Isolation tool
 
         self._build_ui()
@@ -715,7 +717,9 @@ class VisualizerFrame(ctk.CTkFrame):
         
         self.album_style = ctk.CTkOptionMenu(
             self.title_album_frame,
-            values=["11. Playlist Cover (YouTube)", "1. Kinetic Slide-In",
+            values=["11. Playlist Cover (YouTube)", "12. Playlist Center Stack",
+                    "13. Playlist Right Panel", "14. Playlist Glass Minimal",
+                    "1. Kinetic Slide-In",
                     "2. Side Playlist Panel", "3. Live Wave Indicator",
                     "4. Modern Ticker Bar", "5. Neon Glow Label", "6. Cinematic Corner Stamp",
                     "7. Top Header Banner", "8. Minimalist Drop Shadow", "9. Centered Focal Board",
@@ -879,6 +883,25 @@ class VisualizerFrame(ctk.CTkFrame):
         self.enhancer_menu.set(self.enhancer)
         self.enhancer_menu.pack(fill="x", padx=14, pady=(0, 14))
 
+        # Mix Master Card
+        card_master = ctk.CTkFrame(page, corner_radius=20, fg_color=CARD,
+                                   border_width=1, border_color=CARD_BORDER)
+        card_master.pack(fill="x", padx=6, pady=(6, 6))
+        ctk.CTkLabel(card_master, text="🎚️ Mix Master",
+                     font=ctk.CTkFont(size=14, weight="bold")
+                     ).pack(anchor="w", padx=14, pady=(12, 2))
+        ctk.CTkLabel(card_master,
+                     text="Streaming-ready mastering chain (compressor → EQ → loudness → limiter). Applies on export with 256k audio.",
+                     font=ctk.CTkFont(size=11), text_color=MUTED,
+                     wraplength=390, justify="left").pack(anchor="w", padx=14,
+                                                          pady=(0, 8))
+        self.master_menu = ctk.CTkOptionMenu(
+            card_master, values=list(engine.MASTER_PRESETS), height=30,
+            corner_radius=20, fg_color=ACCENT, button_color=ACCENT_HOVER,
+            button_hover_color=ACCENT_HOVER, command=self._on_master_change)
+        self.master_menu.set(self.master_preset)
+        self.master_menu.pack(fill="x", padx=14, pady=(0, 14))
+
     def _on_vocal_vol_change(self, val):
         self.vocal_volume = float(val)
         self.vocal_vol_lbl.configure(text=f"Output Volume: {int(val)}%")
@@ -893,6 +916,15 @@ class VisualizerFrame(ctk.CTkFrame):
 
     def _on_enhancer_change(self, val):
         self.enhancer = val
+
+    def _on_master_change(self, val):
+        self.master_preset = val
+
+    def _remove_watermark(self):
+        self.watermark_path = None
+        self.wm_btn.configure(text="🖼 Add logo…")
+        self._pv_key = None
+        self._status("Watermark removed.")
 
     def _run_stem_splitter(self):
         if not self.audio_paths:
@@ -964,6 +996,24 @@ class VisualizerFrame(ctk.CTkFrame):
             button_hover_color=ACCENT_HOVER)
         self.wm_corner_menu.set("Top Right")
         self.wm_corner_menu.pack(side="left", padx=(6, 0))
+        self._grey_btn(wrow, "✕", self._remove_watermark, width=30,
+                       height=30).pack(side="left", padx=(6, 0))
+
+        # ---- Video Effects ----
+        self._label(page, "🌟 Video Effects", pady=(14, 2))
+        erow = ctk.CTkFrame(page, fg_color="transparent")
+        erow.pack(fill="x", padx=6)
+        self.effect_menu = ctk.CTkOptionMenu(
+            erow, values=engine.EFFECTS, height=30, fg_color=ACCENT,
+            button_color=ACCENT_HOVER, button_hover_color=ACCENT_HOVER)
+        self.effect_menu.set("None")
+        self.effect_menu.pack(side="left", fill="x", expand=True)
+        self._label(page, "Effect intensity", pady=(6, 0))
+        self.effect_intensity = ctk.CTkSlider(page, from_=0, to=100,
+                                              progress_color=ACCENT,
+                                              button_color=ACCENT)
+        self.effect_intensity.set(50)
+        self.effect_intensity.pack(fill="x", padx=6, pady=(0, 10))
 
     # ---------------- file handlers ----------------
 
@@ -1321,6 +1371,10 @@ class VisualizerFrame(ctk.CTkFrame):
             "bass_boost": self.bass_boost,
             "reverb": self.reverb,
             "enhancer": self.enhancer,
+            "master": self.master_preset,
+            # Video effects
+            "effect": self.effect_menu.get(),
+            "effect_intensity": float(self.effect_intensity.get()),
         }
 
     # ---------------- live preview ----------------
@@ -1365,6 +1419,9 @@ class VisualizerFrame(ctk.CTkFrame):
         self.after(40, self._preview_tick)
 
     def _preview_frame(self):
+        """UI-thread part of the preview: advance time, decide whether a new
+        frame is needed, then hand composition to a worker thread so button
+        clicks and sliders never wait on rendering."""
         if self.image_path is None:
             return
         an = self.analysis
@@ -1377,32 +1434,51 @@ class VisualizerFrame(ctk.CTkFrame):
                 self._pause_preview()
         self._pv_last_tick = now
 
+        if self._pv_busy:
+            return                       # previous frame still rendering: skip
         opts = self._current_opts()
         opts["fade"] = False   # fade only affects the export; keep preview bright
 
-        if not self._pv_playing and self._pv_last_opts == opts and self._pv_last_t == self._pv_t:
+        if not self._pv_playing and self._pv_last_opts == opts \
+                and self._pv_last_t == self._pv_t:
             return
         self._pv_last_opts = dict(opts)
         self._pv_last_t = self._pv_t
-        if an is None:
-            # image but no audio yet: show plain background
-            try:
-                frame = engine.build_background(
-                    self.image_path, self._preview_size(),
-                    opts["blur"], opts["darken"])
-            except Exception:
-                return
-        else:
-            assets = self._preview_assets(opts)
-            if assets is None:
-                return
-            i = min(an.num_frames - 1, int(self._pv_t * PREVIEW_FPS))
-            frame = engine.compose_frame(assets, i, opts)
+
+        if an is not None:
             if not self._seek_dragging:
                 self.seek.set(self._pv_t)
             self.time_lbl.configure(
                 text=f"{_fmt_clock(self._pv_t)} / {_fmt_clock(an.duration)}")
 
+        self._pv_busy = True
+        t_snapshot = self._pv_t
+        threading.Thread(target=self._pv_compose_worker,
+                         args=(an, opts, t_snapshot), daemon=True).start()
+
+    def _pv_compose_worker(self, an, opts, t):
+        """Compose the preview frame off the Tk main thread."""
+        try:
+            if an is None:
+                frame = engine.build_background(
+                    self.image_path, self._preview_size(),
+                    opts["blur"], opts["darken"])
+            else:
+                assets = self._preview_assets(opts)
+                if assets is None:
+                    self.after(0, self._pv_show, None)
+                    return
+                i = min(an.num_frames - 1, int(t * PREVIEW_FPS))
+                frame = engine.compose_frame(assets, i, opts)
+            self.after(0, self._pv_show, frame)
+        except Exception:
+            traceback.print_exc()
+            self.after(0, self._pv_show, None)
+
+    def _pv_show(self, frame):
+        self._pv_busy = False
+        if frame is None:
+            return
         photo = ctk.CTkImage(light_image=frame, dark_image=frame, size=frame.size)
         self._pv_photo = photo
         self._pv_disp_size = frame.size
