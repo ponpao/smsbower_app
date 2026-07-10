@@ -1,8 +1,12 @@
 {
-  "version": "3.0.1",
-  "release_date": "2026-06-30",
-  "download_url": "https://github.com/ponpao/smsbower_app/releases/download/V3.0.0/TRAVKOD.CODEs.3.0.1.exe",
+  "version": "4.1.0",
+  "release_date": "2026-07-10",
+  "download_url": "https://github.com/ponpao/smsbower_app/releases/download/V4.1.0/TRAVKOD.CODEs.4.1.0.exe",
   "changelog": [
-    "ថែមមុខងារបញ្ចូលលុយពិតៗ (Top-Up) ជាមួយការផ្ទៀងផ្ទាត់សមតុល្យស្វ័យប្រវត្តិ"
+    "License: App បើកបានធម្មតា តែ Function ត្រូវ Lock រហូតដល់ Activate (មិនមែនបិទ App ទាំងស្រុង)",
+    "License: មាន 🔑 ប៊ូតុងលើ Header ចុចមក Popup Activate",
+    "License: បង្ហាញឈ្មោះ Owner (User) លើ App ក្រោយ Activate",
+    "License: តម្រឹមតាម Google Sheet ថ្មី (License_Key, Duration, Device_UID, Phone_Model, Status, Activation_Date, Expiry_Date, Owner)",
+    "Keyadmin: ថែមប្រអប់ Owner/User name ពេល Generate"
   ]
 }

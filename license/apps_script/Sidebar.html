@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    :root { --accent:#d64336; --accent2:#b8352b; --line:#e6e4dc; --muted:#6b7280; }
+    * { box-sizing:border-box; font-family:'Segoe UI',system-ui,sans-serif; }
+    body { margin:0; padding:12px; color:#1a1e24; background:#f7f5f0; }
+    h2 { margin:0 0 2px; font-size:16px; }
+    p.sub { margin:0 0 12px; font-size:11px; color:var(--muted); }
+    label { font-size:12px; font-weight:600; display:block; margin:10px 0 3px; }
+    select, input { width:100%; padding:8px; border:1px solid var(--line);
+                    border-radius:8px; font-size:13px; }
+    button { width:100%; padding:10px; border:0; border-radius:10px;
+             background:var(--accent); color:#fff; font-weight:700;
+             font-size:14px; cursor:pointer; margin-top:12px; }
+    button:hover { background:var(--accent2); }
+    button.sec { background:#e5e3db; color:#1a1e24; }
+    .code { margin-top:12px; padding:12px; border:2px dashed var(--accent);
+            border-radius:10px; text-align:center; font-size:18px;
+            font-weight:800; letter-spacing:1px; display:none; }
+    .row { display:flex; gap:8px; }
+    .row > * { flex:1; }
+    .status { font-size:12px; margin-top:8px; min-height:16px; }
+    .err { color:var(--accent2); } .ok { color:#047857; }
+    hr { border:0; border-top:1px solid var(--line); margin:16px 0; }
+    table { width:100%; border-collapse:collapse; font-size:11px; }
+    th,td { text-align:left; padding:4px 3px; border-bottom:1px solid var(--line); }
+    .pill { padding:1px 6px; border-radius:8px; font-size:10px; font-weight:700; }
+    .ACTIVE{background:#d1fae5;color:#065f46;} .REVOKED{background:#fee2e2;color:#991b1b;}
+    .UNUSED{background:#e5e7eb;color:#374151;} .EXPIRED{background:#fef3c7;color:#92400e;}
+  </style>
+</head>
+<body>
+  <h2>🔑 License Admin</h2>
+  <p class="sub">Generate a code, send it to the user. It locks to the first PC that activates it.</p>
+
+  <label>Duration (រយៈពេលប្រើ)</label>
+  <select id="plan">
+    <option value="1">1 Day / ១ថ្ងៃ</option>
+    <option value="7">7 Days / ៧ថ្ងៃ</option>
+    <option value="30" selected>1 Month / ១ខែ (30)</option>
+    <option value="90">3 Months / ៣ខែ (90)</option>
+    <option value="365">1 Year / ១ឆ្នាំ</option>
+    <option value="custom">Custom…</option>
+  </select>
+  <input id="customDays" type="number" placeholder="Custom days" style="display:none;margin-top:6px;">
+
+  <label>Owner / User name (ឈ្មោះអ្នកប្រើ)</label>
+  <input id="owner" placeholder="e.g. Sok Dara / 012 345 678">
+
+  <label>Pre-lock to Device UID (optional)</label>
+  <input id="preMachine" placeholder="leave empty = lock on first use">
+
+  <button onclick="gen()">⚡ Generate Code</button>
+  <div id="code" class="code"></div>
+  <div id="status" class="status"></div>
+
+  <hr>
+  <div class="row">
+    <button class="sec" onclick="refresh()">🔄 Refresh list</button>
+    <button class="sec" onclick="revoke()">🚫 Revoke code…</button>
+  </div>
+  <div id="list"></div>
+
+  <script>
+    const $ = id => document.getElementById(id);
+    $('plan').onchange = () => {
+      $('customDays').style.display = $('plan').value === 'custom' ? 'block' : 'none';
+    };
+    function planDays() {
+      return $('plan').value === 'custom' ? Number($('customDays').value || 0)
+                                          : Number($('plan').value);
+    }
+    function setStatus(msg, cls){ const s=$('status'); s.textContent=msg; s.className='status '+(cls||''); }
+
+    function gen() {
+      const d = planDays();
+      if (!d || d < 1) { setStatus('Enter a valid number of days.', 'err'); return; }
+      setStatus('Generating…');
+      google.script.run.withSuccessHandler(r => {
+        if (r.ok) {
+          const c = $('code'); c.style.display='block'; c.textContent = r.code;
+          setStatus('✅ Code ready — valid ' + r.plan_days + ' days from first activation.', 'ok');
+          refresh();
+        } else setStatus('Error: ' + r.reason, 'err');
+      }).withFailureHandler(e => setStatus('Error: ' + e.message, 'err'))
+        .uiGenerate(d, $('owner').value, $('preMachine').value);
+    }
+
+    function revoke() {
+      const code = prompt('Enter the code to REVOKE:');
+      if (!code) return;
+      google.script.run.withSuccessHandler(r => {
+        setStatus(r.ok ? ('🚫 Revoked ' + r.code) : ('Error: ' + r.reason), r.ok ? 'ok' : 'err');
+        refresh();
+      }).uiRevoke(code.trim());
+    }
+
+    function refresh() {
+      google.script.run.withSuccessHandler(r => {
+        if (!r.ok) return;
+        let h = '<table><tr><th>Code</th><th>Owner</th><th>Days</th><th>Expiry</th><th>Status</th></tr>';
+        r.licenses.slice().reverse().forEach(x => {
+          h += `<tr><td>${x.code}</td><td>${x.owner||''}</td><td>${x.plan_days}</td>`
+             + `<td>${x.expiry||'-'}</td><td><span class="pill ${x.status}">${x.status}</span></td></tr>`;
+        });
+        h += '</table>';
+        $('list').innerHTML = h;
+      }).uiList();
+    }
+    refresh();
+  </script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+
+# Flutter
+keyadmin/build/
+keyadmin/.dart_tool/
+keyadmin/.flutter-plugins*
+keyadmin/android/
+keyadmin/ios/
+keyadmin/.idea/

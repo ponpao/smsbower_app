@@ -1,0 +1,2025 @@
+# -*- coding: utf-8 -*-
+"""
+TRAVKOD CODEs — Video Visualizer tab (Tab 4, next to AI Song)
+=============================================================
+
+Drop an image + an audio file, watch the LIVE PREVIEW, pick one of 12
+visualizer styles (or build your own with Custom), add a movable/resizable
+title, generate AI subtitles (CapCut-style captions), then export an MP4.
+
+Runs standalone too:      python visualizer_tab.py
+
+Integration (main app):   from visualizer.visualizer_tab import add_visualizer_tab, enable_dnd
+                          enable_dnd(app)                 # once, on the main window
+                          add_visualizer_tab(self.tabview)  # after the AI Song tab -> Tab 4
+
+Dependencies:  pip install -r visualizer/requirements.txt
+Optional:      pip install faster-whisper   (AI subtitles / speech-to-text)
+"""
+
+import os
+import subprocess
+import sys
+import threading
+import time
+import traceback
+from tkinter import filedialog, messagebox
+
+import customtkinter as ctk
+from PIL import Image, ImageEnhance, ImageFilter
+
+try:
+    from PIL import ImageGrab
+except ImportError:
+    ImageGrab = None
+
+try:
+    from . import engine
+except ImportError:
+    import engine
+
+try:
+    from tkinterdnd2 import DND_FILES, TkinterDnD
+    HAS_DND = True
+except ImportError:
+    HAS_DND = False
+
+os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+try:
+    import pygame
+    HAS_SOUND = True
+except ImportError:
+    HAS_SOUND = False
+
+TAB_TITLE = "🎬 Visualizer"
+PREVIEW_FPS = 30
+PREVIEW_W = 540
+
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".gif"}
+AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac", ".wma", ".opus"}
+
+LANGUAGES = {
+    "Auto detect": None, "ខ្មែរ (Khmer)": "km", "English": "en",
+    "ไทย (Thai)": "th", "Tiếng Việt": "vi", "中文": "zh",
+    "日本語": "ja", "한국어": "ko",
+}
+
+ACCENT = "#d64336"
+ACCENT_HOVER = "#b8352b"
+BG_MAIN = ('#f7f5f0', '#111418')
+CARD = ('#ffffff', '#1a1e24')
+CARD_BORDER = ('#e6e4dc', '#2a313d')
+MUTED = ("#6b7280", "#8b8b9e")
+
+
+def _fmt_clock(t):
+    t = max(0, int(t))
+    return f"{t // 60}:{t % 60:02d}"
+
+
+# --------------------------------------------------------------------------
+# Drop zone
+# --------------------------------------------------------------------------
+
+class DropZone(ctk.CTkFrame):
+    """Drop card: drag & drop a file, or click to browse."""
+
+    def __init__(self, master, *, icon, title, subtitle, exts, on_file, allow_multiple=False):
+        super().__init__(master, corner_radius=20, fg_color=CARD,
+                         border_width=2, border_color=CARD_BORDER)
+        self.exts = exts
+        self.on_file = on_file
+        self.allow_multiple = allow_multiple
+        self.path = None
+
+        self.icon_lbl = ctk.CTkLabel(self, text=icon, font=ctk.CTkFont(size=24))
+        self.icon_lbl.pack(pady=(8, 0))
+        self.title_lbl = ctk.CTkLabel(self, text=title,
+                                      font=ctk.CTkFont(size=13, weight="bold"))
+        self.title_lbl.pack()
+        self.sub_lbl = ctk.CTkLabel(self, text=subtitle,
+                                    font=ctk.CTkFont(size=11), text_color=MUTED)
+        self.sub_lbl.pack()
+        self.file_lbl = ctk.CTkLabel(self, text="No file selected — click to browse",
+                                     font=ctk.CTkFont(size=11),
+                                     text_color=MUTED, wraplength=300)
+        self.file_lbl.pack(pady=(0, 8))
+
+        for widget in (self, self.icon_lbl, self.title_lbl, self.sub_lbl, self.file_lbl):
+            widget.bind("<Button-1>", self._browse)
+            widget.configure(cursor="hand2")
+
+        if HAS_DND:
+            try:
+                self.drop_target_register(DND_FILES)
+                self.dnd_bind("<<Drop>>", self._on_drop)
+                self.dnd_bind("<<DropEnter>>", lambda e: self.configure(border_color=ACCENT))
+                self.dnd_bind("<<DropLeave>>", lambda e: self._reset_border())
+            except Exception:
+                pass
+
+    def _reset_border(self):
+        self.configure(border_color=ACCENT if self.path else CARD_BORDER)
+
+    def _on_drop(self, event):
+        paths = []
+        for p in self.tk.splitlist(event.data):
+            if os.path.splitext(p)[1].lower() in self.exts:
+                paths.append(p)
+        if paths:
+            if self.allow_multiple:
+                self.set_files(paths)
+            else:
+                self.set_file(paths[0])
+            return
+        self._reset_border()
+        messagebox.showwarning("Unsupported file",
+                               "Please drop: " + ", ".join(sorted(self.exts)))
+
+    def _browse(self, _event=None):
+        patterns = " ".join("*" + e for e in sorted(self.exts))
+        if self.allow_multiple:
+            ps = filedialog.askopenfilenames(filetypes=[("Supported files", patterns)])
+            if ps:
+                self.set_files(list(ps))
+        else:
+            p = filedialog.askopenfilename(filetypes=[("Supported files", patterns)])
+            if p:
+                self.set_file(p)
+
+    def set_file(self, path):
+        self.path = path
+        self.file_lbl.configure(text=os.path.basename(path),
+                                text_color=(ACCENT, "#c4b5fd"))
+        self.configure(border_color=ACCENT)
+        self.on_file(path)
+
+    def set_files(self, paths):
+        self.path = paths
+        self.file_lbl.configure(text=f"Selected {len(paths)} songs",
+                                text_color=(ACCENT, "#c4b5fd"))
+        self.configure(border_color=ACCENT)
+        self.on_file(paths)
+
+
+# --------------------------------------------------------------------------
+# Custom visualizer builder dialog
+# --------------------------------------------------------------------------
+
+class CustomStyleDialog(ctk.CTkToplevel):
+    def __init__(self, master, cfg, on_change):
+        super().__init__(master)
+        self.title("Custom Visualizer Builder")
+        self.geometry("380x520")
+        self.attributes("-topmost", True)
+        self.cfg = cfg
+        self.on_change = on_change
+
+        ctk.CTkLabel(self, text="⚙️ Custom Visualizer",
+                     font=ctk.CTkFont(size=18, weight="bold")).pack(pady=(16, 8))
+
+        body = ctk.CTkFrame(self, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=20)
+
+        def row(label):
+            ctk.CTkLabel(body, text=label,
+                         font=ctk.CTkFont(size=12, weight="bold")).pack(anchor="w", pady=(10, 2))
+
+        row("Element")
+        self.element = ctk.CTkSegmentedButton(
+            body, values=engine.CUSTOM_ELEMENTS, command=lambda _: self._apply())
+        self.element.set(cfg["element"])
+        self.element.pack(fill="x")
+
+        row("Position")
+        self.position = ctk.CTkSegmentedButton(
+            body, values=engine.CUSTOM_POSITIONS, command=lambda _: self._apply())
+        self.position.set(cfg["position"])
+        self.position.pack(fill="x")
+
+        row(f"Bar count: {cfg['count']}")
+        self.count_lbl = body.winfo_children()[-1]
+        self.count = ctk.CTkSlider(body, from_=16, to=128, number_of_steps=28,
+                                   command=lambda _: self._apply())
+        self.count.set(cfg["count"])
+        self.count.pack(fill="x")
+
+        row(f"Thickness: {cfg['thickness']}%")
+        self.thick_lbl = body.winfo_children()[-1]
+        self.thickness = ctk.CTkSlider(body, from_=10, to=100,
+                                       command=lambda _: self._apply())
+        self.thickness.set(cfg["thickness"])
+        self.thickness.pack(fill="x")
+
+        row(f"Height: {cfg['height']}%")
+        self.height_lbl = body.winfo_children()[-1]
+        self.height = ctk.CTkSlider(body, from_=10, to=90,
+                                    command=lambda _: self._apply())
+        self.height.set(cfg["height"])
+        self.height.pack(fill="x")
+
+        switches = ctk.CTkFrame(body, fg_color="transparent")
+        switches.pack(fill="x", pady=(14, 0))
+        self.mirror = ctk.CTkSwitch(switches, text="Mirror", command=self._apply,
+                                    progress_color=ACCENT)
+        self.reflection = ctk.CTkSwitch(switches, text="Reflection", command=self._apply,
+                                        progress_color=ACCENT)
+        self.rounded = ctk.CTkSwitch(switches, text="Rounded", command=self._apply,
+                                     progress_color=ACCENT)
+        for sw, key in ((self.mirror, "mirror"), (self.reflection, "reflection"),
+                        (self.rounded, "rounded")):
+            sw.pack(side="left", expand=True)
+            if cfg[key]:
+                sw.select()
+
+        ctk.CTkButton(self, text="Done", fg_color=ACCENT, hover_color=ACCENT_HOVER,
+                      command=self.destroy).pack(pady=14)
+
+    def _apply(self):
+        self.cfg.update(
+            element=self.element.get(), position=self.position.get(),
+            count=int(self.count.get()), thickness=int(self.thickness.get()),
+            height=int(self.height.get()),
+            mirror=bool(self.mirror.get()), reflection=bool(self.reflection.get()),
+            rounded=bool(self.rounded.get()),
+        )
+        self.count_lbl.configure(text=f"Bar count: {self.cfg['count']}")
+        self.thick_lbl.configure(text=f"Thickness: {self.cfg['thickness']}%")
+        self.height_lbl.configure(text=f"Height: {self.cfg['height']}%")
+        self.on_change()
+
+
+# --------------------------------------------------------------------------
+# Custom video size dialog
+# --------------------------------------------------------------------------
+
+class CustomSizeDialog(ctk.CTkToplevel):
+    def __init__(self, master, current, on_ok):
+        super().__init__(master)
+        self.title("Custom Size")
+        self.geometry("300x230")
+        self.attributes("-topmost", True)
+        self.on_ok = on_ok
+
+        ctk.CTkLabel(self, text="📐 Custom video size",
+                     font=ctk.CTkFont(size=16, weight="bold")).pack(pady=(16, 8))
+        row = ctk.CTkFrame(self, fg_color="transparent")
+        row.pack(pady=4)
+        self.w_entry = ctk.CTkEntry(row, width=90, justify="center")
+        self.w_entry.insert(0, str(current[0]))
+        self.w_entry.pack(side="left")
+        ctk.CTkLabel(row, text="  ×  ").pack(side="left")
+        self.h_entry = ctk.CTkEntry(row, width=90, justify="center")
+        self.h_entry.insert(0, str(current[1]))
+        self.h_entry.pack(side="left")
+        ctk.CTkLabel(self, text="Width × Height in pixels (240 – 3840)",
+                     font=ctk.CTkFont(size=11), text_color=MUTED).pack(pady=(4, 8))
+        ctk.CTkButton(self, text="OK", fg_color=ACCENT, hover_color=ACCENT_HOVER,
+                      command=self._ok).pack(pady=6)
+
+    def _ok(self):
+        try:
+            w = max(240, min(3840, int(self.w_entry.get())))
+            h = max(240, min(3840, int(self.h_entry.get())))
+        except ValueError:
+            messagebox.showwarning("Custom size", "Please enter numbers.", parent=self)
+            return
+        self.on_ok((w, h))
+        self.destroy()
+
+
+# --------------------------------------------------------------------------
+# Subtitle editor dialog
+# --------------------------------------------------------------------------
+
+class SubtitleEditor(ctk.CTkToplevel):
+    def __init__(self, master, subtitles, on_save):
+        super().__init__(master)
+        self.title("Subtitle Editor (SRT)")
+        self.geometry("560x600")
+        self.attributes("-topmost", True)
+        self.on_save = on_save
+
+        ctk.CTkLabel(self, text="📝 Edit subtitles — SRT format",
+                     font=ctk.CTkFont(size=16, weight="bold")).pack(pady=(14, 4))
+        ctk.CTkLabel(self, text="00:00:01,000 --> 00:00:04,000  then the text on the next line",
+                     font=ctk.CTkFont(size=11), text_color=MUTED).pack()
+
+        self.textbox = ctk.CTkTextbox(self, font=ctk.CTkFont(size=13))
+        self.textbox.pack(fill="both", expand=True, padx=16, pady=10)
+        self.textbox.insert("1.0", engine.format_srt(subtitles))
+
+        ctk.CTkButton(self, text="💾 Save subtitles", fg_color=ACCENT,
+                      hover_color=ACCENT_HOVER, command=self._save).pack(pady=(0, 14))
+
+    def _save(self):
+        try:
+            subs = engine.parse_srt(self.textbox.get("1.0", "end"))
+        except Exception as exc:
+            messagebox.showerror("SRT error", str(exc), parent=self)
+            return
+        self.on_save(subs)
+        self.destroy()
+
+
+# --------------------------------------------------------------------------
+# Main tab
+# --------------------------------------------------------------------------
+
+class RenderOverlay(ctk.CTkFrame):
+    """Full-window modern render popup: a snapshot of the app blurred behind
+    a glassy card with an animated circular progress ring, %, elapsed time
+    and ETA. Covers the whole frame like a 2050-style loader."""
+
+    def __init__(self, master, on_cancel):
+        super().__init__(master, fg_color="transparent")
+        self.on_cancel = on_cancel
+        self._angle = 0.0
+        self._frac = 0.0
+        self._t0 = time.monotonic()
+        self._spin_job = None
+        self._done = False
+
+        # dim + blurred backdrop from a snapshot of the frame
+        self.bg_label = ctk.CTkLabel(self, text="")
+        self.bg_label.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self._set_backdrop(master)
+
+        card = ctk.CTkFrame(self, corner_radius=28, width=280, height=300,
+                            fg_color=("#f6f5f1", "#12151b"),
+                            border_width=1, border_color=CARD_BORDER)
+        card.place(relx=0.5, rely=0.5, anchor="center")
+        card.pack_propagate(False)
+
+        self.ring = ctk.CTkCanvas(card, width=170, height=170,
+                                  highlightthickness=0,
+                                  bg=self._canvas_bg())
+        self.ring.pack(pady=(30, 6))
+        self.pct_lbl = ctk.CTkLabel(card, text="0%",
+                                    font=ctk.CTkFont(size=30, weight="bold"))
+        self.pct_lbl.place(in_=self.ring, relx=0.5, rely=0.5, anchor="center")
+        self.stage_lbl = ctk.CTkLabel(card, text="Preparing…",
+                                      font=ctk.CTkFont(size=13, weight="bold"))
+        self.stage_lbl.pack()
+        self.time_lbl = ctk.CTkLabel(card, text="00:00  •  ETA --:--",
+                                     font=ctk.CTkFont(size=12), text_color=MUTED)
+        self.time_lbl.pack(pady=(2, 8))
+        self.cancel_btn = ctk.CTkButton(card, text="✖ Cancel", width=130,
+                                        height=32, corner_radius=20,
+                                        fg_color=("#e5e3db", "#242a33"),
+                                        hover_color=("#d5d3cb", "#323a46"),
+                                        text_color=("#111827", "#e5e7eb"),
+                                        command=self._cancel)
+        self.cancel_btn.pack(pady=(0, 4))
+
+        self.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self._spin()
+
+    def _canvas_bg(self):
+        return "#12151b" if ctk.get_appearance_mode() == "Dark" else "#f6f5f1"
+
+    def _set_backdrop(self, master):
+        if ImageGrab is None:
+            self.bg_label.configure(fg_color=("#33333a", "#0a0c10"))
+            return
+        try:
+            master.update_idletasks()
+            w, h = max(1, master.winfo_width()), max(1, master.winfo_height())
+            x, y = master.winfo_rootx(), master.winfo_rooty()
+            img = ImageGrab.grab(bbox=(x, y, x + w, y + h))
+            img = img.filter(ImageFilter.GaussianBlur(14))
+            img = ImageEnhance.Brightness(img).enhance(0.55)
+            self._bg_img = ctk.CTkImage(light_image=img, dark_image=img,
+                                        size=(w, h))
+            self.bg_label.configure(image=self._bg_img)
+        except Exception:
+            self.bg_label.configure(fg_color=("#33333a", "#0a0c10"))
+
+    def _spin(self):
+        self._angle = (self._angle + 9) % 360
+        self._draw_ring()
+        self._update_time()
+        self._spin_job = self.after(33, self._spin)
+
+    def _draw_ring(self):
+        c = self.ring
+        c.delete("all")
+        size = 170
+        pad = 16
+        box = (pad, pad, size - pad, size - pad)
+        col1, col2 = "#8b5cf6", ACCENT
+        # track
+        c.create_oval(*box, outline="#3a3a46", width=10)
+        if self._frac > 0:
+            # determinate arc grows with progress
+            c.create_arc(*box, start=90, extent=-self._frac * 360,
+                         style="arc", outline=col2, width=10)
+        # spinner comet on top so motion is always visible (power/alive cue)
+        c.create_arc(*box, start=90 - self._angle, extent=-46,
+                     style="arc", outline=col1, width=10)
+
+    def _update_time(self):
+        el = time.monotonic() - self._t0
+        eta = ""
+        if self._frac > 0.02:
+            total = el / self._frac
+            rem = max(0, total - el)
+            eta = f"ETA {int(rem // 60):02d}:{int(rem % 60):02d}"
+        else:
+            eta = "ETA --:--"
+        self.time_lbl.configure(
+            text=f"{int(el // 60):02d}:{int(el % 60):02d}  •  {eta}")
+
+    def set_progress(self, done, total, stage="Rendering"):
+        self._frac = (done / total) if total else 0.0
+        self.pct_lbl.configure(text=f"{int(self._frac * 100)}%")
+        self.stage_lbl.configure(text=f"{stage}  {done}/{total}")
+
+    def set_stage(self, text):
+        self.stage_lbl.configure(text=text)
+
+    def _cancel(self):
+        self.cancel_btn.configure(text="Cancelling…", state="disabled")
+        self.on_cancel()
+
+    def close(self):
+        self._done = True
+        if self._spin_job:
+            self.after_cancel(self._spin_job)
+        self.destroy()
+
+
+class VisualizerFrame(ctk.CTkFrame):
+    """The full Visualizer tab UI. Pack/grid it into any container."""
+
+    def __init__(self, master, **kwargs):
+        kwargs.setdefault("fg_color", BG_MAIN)
+        super().__init__(master, **kwargs)
+        self.image_path = None
+        self.audio_paths = []
+        self.watermark_path = None
+        self.subtitles = []
+        self.cached_tracklist = []
+        self.custom_cfg = dict(engine.DEFAULT_CUSTOM)
+        self.title_custom = None          # (fx, fy) after dragging on preview
+        self._pv_disp_size = None         # size of the frame shown in preview
+        self.analysis = None            # engine.Analysis at PREVIEW_FPS
+        self._analyzing = False
+        self._cancel = threading.Event()
+        self._worker = None
+        self._last_output = None
+
+        # preview state
+        self._pv_assets = None
+        self._pv_key = None
+        self._pv_playing = False
+        self._pv_t = 0.0
+        self._pv_last_tick = None
+        self._pv_last_opts = None
+        self._pv_last_t = None
+        self._pv_busy = False
+        self._overlay = None
+        self._pv_photo = None
+        self._sound_ready = False
+        self._seek_dragging = False
+
+        # Audio Studio workshop parameters
+        self.vocal_volume = 100.0
+        self.bass_boost = 0.0
+        self.reverb = 0.0
+        self.enhancer = "Disable"
+        self.master_preset = "Off"
+        self.vocal_isolated_path = None   # set by the Vocal Isolation tool
+
+        # license state
+        self._licensed = False
+        self._license_owner = ""
+        self._license_days = 0
+        self._license_expiry = ""
+
+        self._build_ui()
+        self.after(66, self._preview_tick)
+        self.after(150, self._init_license)
+
+    # ------------- UI (compact phone-style: preview on top, tab pages) ----
+
+    PAGE_NAMES = ("Files", "Style", "Title", "Subs", "Studio", "More")
+
+    def _build_ui(self):
+        # header strip with the app name + license key button (top bar)
+        header = ctk.CTkFrame(self, fg_color="transparent", height=34)
+        header.pack(side="top", fill="x", padx=16, pady=(8, 0))
+        ctk.CTkLabel(header, text="🎬 Video Visualizer",
+                     font=ctk.CTkFont(size=14, weight="bold")).pack(side="left")
+        self.lic_btn = ctk.CTkButton(
+            header, text="🔒 Activate", width=110, height=26, corner_radius=20,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color=("#d1d5db", "#2b2b3a"), hover_color=("#b8bcc4", "#3a3a4d"),
+            text_color=("#111827", "#e5e7eb"), command=self._open_license)
+        self.lic_btn.pack(side="right")
+
+        # bottom action bar packed first so it is never pushed off-screen
+        bottom = ctk.CTkFrame(self, fg_color="transparent")
+        bottom.pack(side="bottom", fill="x", padx=14, pady=(4, 10))
+        self._build_bottom(bottom)
+
+        top = ctk.CTkFrame(self, corner_radius=20, fg_color=CARD,
+                           border_width=1, border_color=CARD_BORDER)
+        top.pack(side="top", fill="x", padx=14, pady=(6, 4))
+        self._build_preview(top)
+
+        self.section_bar = ctk.CTkSegmentedButton(
+            self, values=list(self.PAGE_NAMES), command=self._show_page,
+            selected_color=ACCENT, selected_hover_color=ACCENT_HOVER,
+            font=ctk.CTkFont(size=9, weight="bold"), height=32, corner_radius=20)
+        self.section_bar.pack(side="top", fill="x", padx=14, pady=(4, 2))
+
+        self.page_container = ctk.CTkFrame(self, fg_color="transparent")
+        self.page_container.pack(side="top", fill="both", expand=True)
+        builders = {"Files": self._page_files, "Style": self._page_style,
+                    "Title": self._page_title, "Subs": self._page_subs,
+                    "Studio": self._page_ai_studio,
+                    "More": self._page_extras}
+        self.pages = {}
+        for name in self.PAGE_NAMES:
+            page = ctk.CTkScrollableFrame(self.page_container,
+                                          fg_color="transparent")
+            builders[name](page)
+            self.pages[name] = page
+        self.section_bar.set("Files")
+        self._show_page("Files")
+
+    def _show_page(self, name):
+        for page in self.pages.values():
+            page.pack_forget()
+        self.pages[name].pack(fill="both", expand=True, padx=8)
+
+    # ------------- license: open app but lock functions until active -------
+
+    def _load_license_module(self):
+        try:
+            try:
+                from license import license_client as lic
+            except ImportError:
+                sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+                from license import license_client as lic
+            return lic
+        except Exception:
+            return None
+
+    def _init_license(self):
+        """Check license in the background; lock the UI until it is active."""
+        lic = self._load_license_module()
+        if lic is None:
+            # license module missing: run unlocked unless a lock is enforced
+            if os.environ.get("TRAVKOD_LICENSE_REQUIRED") == "1":
+                self._apply_lock(False, "")
+            else:
+                self._apply_lock(True, "")
+                self.lic_btn.pack_forget()
+            return
+        self._set_lic_btn("checking")
+
+        def worker():
+            st = lic.check_license()
+            self.after(0, self._on_license_state, st)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_license_state(self, st):
+        owner = getattr(st, "owner", "") or ""
+        self._apply_lock(bool(st.ok), owner,
+                         days=getattr(st, "days_left", 0),
+                         expiry=getattr(st, "expiry", ""))
+
+    def _apply_lock(self, licensed, owner, days=0, expiry=""):
+        self._licensed = licensed
+        self._license_owner = owner
+        self._license_days = days
+        self._license_expiry = expiry
+        # gate the main action; the lock overlay blocks the rest
+        state = "normal" if licensed else "disabled"
+        try:
+            self.render_btn.configure(state=state)
+        except Exception:
+            pass
+        if licensed:
+            self._remove_lock_overlay()
+            self._set_lic_btn("ok")
+            who = f" · {owner}" if owner else ""
+            self._status(f"✅ License active{who} — សល់ {days} ថ្ងៃ")
+        else:
+            self._show_lock_overlay()
+            self._set_lic_btn("locked")
+
+    def _set_lic_btn(self, mode):
+        if not hasattr(self, "lic_btn"):
+            return
+        if mode == "ok":
+            label = "🔑 Licensed"
+            if self._license_days:
+                label = f"🔑 {self._license_days}d"
+            self.lic_btn.configure(text=label, fg_color=("#10b981", "#059669"),
+                                   hover_color=("#0d9668", "#047852"),
+                                   text_color="#ffffff")
+        elif mode == "checking":
+            self.lic_btn.configure(text="⏳ Checking…")
+        else:  # locked
+            self.lic_btn.configure(text="🔒 Activate",
+                                   fg_color=ACCENT, hover_color=ACCENT_HOVER,
+                                   text_color="#ffffff")
+
+    def _show_lock_overlay(self):
+        if getattr(self, "_lock_overlay", None) is not None:
+            return
+        ov = ctk.CTkFrame(self.page_container, corner_radius=16,
+                          fg_color=("#f0eeE8", "#0e1116"))
+        ov.place(relx=0, rely=0, relwidth=1, relheight=1)
+        inner = ctk.CTkFrame(ov, fg_color="transparent")
+        inner.place(relx=0.5, rely=0.42, anchor="center")
+        ctk.CTkLabel(inner, text="🔒", font=ctk.CTkFont(size=54)).pack()
+        ctk.CTkLabel(inner, text="មុខងារត្រូវបានចាក់សោ",
+                     font=ctk.CTkFont(size=17, weight="bold")).pack(pady=(6, 0))
+        ctk.CTkLabel(inner,
+                     text="សូមចុច 🔑 ខាងលើ ដើម្បីបញ្ចូលកូដ Activate\n"
+                          "(Functions locked — click the key to activate).",
+                     font=ctk.CTkFont(size=12), text_color=MUTED,
+                     justify="center").pack(pady=(2, 10))
+        ctk.CTkButton(inner, text="🔑 Activate Now", height=40, corner_radius=20,
+                      font=ctk.CTkFont(size=14, weight="bold"),
+                      fg_color=ACCENT, hover_color=ACCENT_HOVER,
+                      command=self._open_license).pack()
+        self._lock_overlay = ov
+
+    def _remove_lock_overlay(self):
+        ov = getattr(self, "_lock_overlay", None)
+        if ov is not None:
+            ov.destroy()
+            self._lock_overlay = None
+
+    def _open_license(self):
+        lic = self._load_license_module()
+        if lic is None:
+            messagebox.showinfo("License", "License module not found.")
+            return
+        try:
+            from license.license_gate import LicenseDialog
+        except ImportError:
+            sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+            from license.license_gate import LicenseDialog
+        st = lic.check_license()
+        dlg = LicenseDialog(self.winfo_toplevel(), st)
+        dlg.grab_set()
+        self.wait_window(dlg)
+        # re-check after the dialog closes (it may have activated)
+        self._init_license()
+
+    # ---- top: live preview ----
+
+    def _build_preview(self, card):
+        self.preview_lbl = ctk.CTkLabel(card, text="🖼️  Drop an image to start the preview",
+                                        text_color=MUTED, height=230)
+        self.preview_lbl.pack(padx=12, pady=(10, 4))
+        self.preview_lbl.bind("<Button-1>", self._on_preview_drag)
+        self.preview_lbl.bind("<B1-Motion>", self._on_preview_drag)
+
+        transport = ctk.CTkFrame(card, fg_color="transparent")
+        transport.pack(fill="x", padx=12, pady=(0, 10))
+        self.play_btn = ctk.CTkButton(transport, text="▶", width=40, height=30,
+                                      corner_radius=20, fg_color=ACCENT,
+                                      hover_color=ACCENT_HOVER,
+                                      font=ctk.CTkFont(size=14, weight="bold"),
+                                      command=self._toggle_play)
+        self.play_btn.pack(side="left")
+        self.seek = ctk.CTkSlider(transport, from_=0, to=1,
+                                  progress_color=ACCENT, button_color=ACCENT,
+                                  command=self._on_seek_scroll)
+        self.seek.set(0)
+        self.seek.pack(side="left", fill="x", expand=True, padx=8)
+        self.seek.bind("<Button-1>", lambda e: self._set_seek_drag(True))
+        self.seek.bind("<ButtonRelease-1>", self._seek_release)
+        self.time_lbl = ctk.CTkLabel(transport, text="0:00 / 0:00",
+                                     font=ctk.CTkFont(size=11), text_color=MUTED)
+        self.time_lbl.pack(side="left")
+
+    # ---- bottom: start bar ----
+
+    def _build_bottom(self, bottom):
+        action = ctk.CTkFrame(bottom, fg_color="transparent")
+        action.pack(fill="x")
+        self.render_btn = ctk.CTkButton(
+            action, text="⚡  Create Video", height=44, corner_radius=20,
+            font=ctk.CTkFont(size=15, weight="bold"),
+            fg_color=ACCENT, hover_color=ACCENT_HOVER, command=self._start_render)
+        self.render_btn.pack(side="left", fill="x", expand=True)
+        self.cancel_btn = ctk.CTkButton(
+            action, text="✖", height=44, width=44, corner_radius=20,
+            fg_color=("#d1d5db", "#2b2b3a"), hover_color=("#b8bcc4", "#3a3a4d"),
+            text_color=("#111827", "#e5e7eb"), command=self._cancel.set,
+            state="disabled")
+        self.cancel_btn.pack(side="left", padx=(8, 0))
+        self.open_btn = ctk.CTkButton(
+            action, text="📂", height=44, width=44, corner_radius=20,
+            fg_color=("#10b981", "#059669"), hover_color=("#0d9668", "#047852"),
+            command=self._open_output, state="disabled")
+        self.open_btn.pack(side="left", padx=(8, 0))
+
+        self.progress = ctk.CTkProgressBar(bottom, height=8, corner_radius=6,
+                                           progress_color=ACCENT)
+        self.progress.set(0)
+        self.progress.pack(fill="x", pady=(8, 0))
+        self.status_lbl = ctk.CTkLabel(bottom, text="Ready — drop an image and audio.",
+                                       font=ctk.CTkFont(size=11), text_color=MUTED,
+                                       wraplength=430, justify="left")
+        self.status_lbl.pack(anchor="w", pady=(4, 0))
+
+    # ---- small helpers ----
+
+    def _label(self, parent, text, pady=(8, 0)):
+        ctk.CTkLabel(parent, text=text, font=ctk.CTkFont(size=11, weight="bold")
+                     ).pack(anchor="w", padx=6, pady=pady)
+
+    def _menu(self, parent, values, default, command=None):
+        menu = ctk.CTkOptionMenu(parent, values=values, fg_color=ACCENT,
+                                 button_color=ACCENT_HOVER,
+                                 button_hover_color=ACCENT_HOVER, height=30,
+                                 corner_radius=20, command=command)
+        menu.set(default)
+        menu.pack(fill="x", padx=6)
+        return menu
+
+    def _slider(self, parent, label, lo, hi, default):
+        self._label(parent, label)
+        slider = ctk.CTkSlider(parent, from_=lo, to=hi, progress_color=ACCENT,
+                               button_color=ACCENT)
+        slider.set(default)
+        slider.pack(fill="x", padx=6, pady=(0, 2))
+        return slider
+
+    def _grey_btn(self, parent, text, command, **kw):
+        kw.setdefault("corner_radius", 20)
+        return ctk.CTkButton(parent, text=text, command=command,
+                             fg_color=("#d1d5db", "#2b2b3a"),
+                             hover_color=("#b8bcc4", "#3a3a4d"),
+                             text_color=("#111827", "#e5e7eb"), **kw)
+
+    # ---- page: files ----
+
+    def _page_files(self, page):
+        self.image_zone = DropZone(page, icon="🖼️", title="Drag & Drop Image Here",
+                                   subtitle="PNG • JPG • WEBP — video background",
+                                   exts=IMAGE_EXTS, on_file=self._set_image)
+        self.image_zone.pack(fill="x", padx=6, pady=(6, 4))
+        self.audio_zone = DropZone(page, icon="🎵", title="Drag & Drop Audio(s) Here",
+                                   subtitle="MP3 • WAV • M4A — single/album files",
+                                   exts=AUDIO_EXTS, on_file=self._set_audio,
+                                   allow_multiple=True)
+        self.audio_zone.pack(fill="x", padx=6, pady=(4, 4))
+
+        # ---- Tracklist Manager (bulk songs: reorder / remove / add) ----
+        self.tracks_box = ctk.CTkFrame(page, corner_radius=20, fg_color=CARD,
+                                       border_width=1, border_color=CARD_BORDER)
+        self.tracks_box.pack(fill="x", padx=6, pady=(4, 4))
+        head = ctk.CTkFrame(self.tracks_box, fg_color="transparent")
+        head.pack(fill="x", padx=12, pady=(10, 2))
+        ctk.CTkLabel(head, text="♪ Tracklist Manager",
+                     font=ctk.CTkFont(size=13, weight="bold")).pack(side="left")
+        self.tracks_count_lbl = ctk.CTkLabel(head, text="0 songs",
+                                             font=ctk.CTkFont(size=11),
+                                             text_color=MUTED)
+        self.tracks_count_lbl.pack(side="right")
+        self.tracks_rows = ctk.CTkFrame(self.tracks_box, fg_color="transparent")
+        self.tracks_rows.pack(fill="x", padx=8, pady=(0, 2))
+        trow = ctk.CTkFrame(self.tracks_box, fg_color="transparent")
+        trow.pack(fill="x", padx=12, pady=(4, 12))
+        ctk.CTkButton(trow, text="➕ Add Songs", height=28, corner_radius=20,
+                      fg_color=ACCENT, hover_color=ACCENT_HOVER,
+                      command=self._tracks_add).pack(side="left", fill="x",
+                                                     expand=True)
+        self._grey_btn(trow, "🗑 Clear All", self._tracks_clear, height=28,
+                       width=90).pack(side="left", padx=(6, 0))
+        self._refresh_track_rows()
+
+        if not HAS_DND:
+            ctk.CTkLabel(page, text="ℹ️ Drag & drop needs 'pip install tkinterdnd2' — click a card to browse.",
+                         font=ctk.CTkFont(size=11), wraplength=400, justify="left",
+                         text_color=("#9a6700", "#d4a72c")).pack(anchor="w", padx=6,
+                                                                 pady=(4, 0))
+        if not HAS_SOUND:
+            ctk.CTkLabel(page, text="🔇 Preview sound needs 'pip install pygame' (export always has audio).",
+                         font=ctk.CTkFont(size=11), wraplength=400, justify="left",
+                         text_color=("#9a6700", "#d4a72c")).pack(anchor="w", padx=6,
+                                                                 pady=(4, 0))
+        if not engine.khmer_support()["fonts_ok"]:
+            ctk.CTkLabel(page,
+                         text="⚠️ រកមិនឃើញ folder 'visualizer/fonts/' — Khmer fonts បាត់! "
+                              "ត្រូវ copy folder fonts ជាមួយកម្មវិធីផង។",
+                         font=ctk.CTkFont(size=11), justify="left",
+                         text_color=("#b91c1c", "#f87171"), wraplength=400,
+                         ).pack(anchor="w", padx=6, pady=(6, 0))
+
+        self.khmer_status_lbl = ctk.CTkLabel(page, text="",
+                                             font=ctk.CTkFont(size=11),
+                                             justify="left", wraplength=400)
+        self.khmer_status_lbl.pack(anchor="w", padx=6, pady=(6, 0))
+        self.fix_khmer_btn = ctk.CTkButton(
+            page, text="🛠 Fix អក្សរខ្មែរឥឡូវនេះ (auto install)", height=32,
+            corner_radius=20,
+            fg_color=("#dc2626", "#b91c1c"), hover_color=("#b91c1c", "#991b1b"),
+            command=self._fix_khmer)
+        self._refresh_khmer_status()
+
+    # ---- page: style ----
+
+    def _page_style(self, page):
+        self._label(page, "Style", pady=(6, 0))
+        srow = ctk.CTkFrame(page, fg_color="transparent")
+        srow.pack(fill="x", padx=6)
+        self.style_menu = ctk.CTkOptionMenu(
+            srow, values=engine.STYLES, fg_color=ACCENT, button_color=ACCENT_HOVER,
+            button_hover_color=ACCENT_HOVER, height=30)
+        self.style_menu.set(engine.STYLES[0])
+        self.style_menu.pack(side="left", fill="x", expand=True)
+        self._grey_btn(srow, "⚙️ Custom…", self._open_custom, width=92,
+                       height=30).pack(side="left", padx=(6, 0))
+
+        self._label(page, "Ratio / Resolution")
+        res_values = ([engine.RES_ORIGINAL] + list(engine.RESOLUTIONS)
+                      + [engine.RES_CUSTOM])
+        self.res_menu = self._menu(page, res_values, list(engine.RESOLUTIONS)[0],
+                                   command=self._on_res_change)
+        self.custom_size = (1920, 1080)
+
+        grid = ctk.CTkFrame(page, fg_color="transparent")
+        grid.pack(fill="x", padx=6, pady=(8, 0))
+        grid.grid_columnconfigure((0, 1), weight=1)
+        ctk.CTkLabel(grid, text="Color Theme", font=ctk.CTkFont(size=11, weight="bold")
+                     ).grid(row=0, column=0, sticky="w")
+        self.theme_menu = ctk.CTkOptionMenu(grid, values=list(engine.THEMES),
+                                            fg_color=ACCENT, button_color=ACCENT_HOVER,
+                                            button_hover_color=ACCENT_HOVER, height=30)
+        self.theme_menu.set(list(engine.THEMES)[0])
+        self.theme_menu.grid(row=1, column=0, sticky="ew", padx=(0, 6))
+        ctk.CTkLabel(grid, text="FPS", font=ctk.CTkFont(size=11, weight="bold")
+                     ).grid(row=0, column=1, sticky="w")
+        self.fps_menu = ctk.CTkOptionMenu(grid, values=["24", "30", "60"],
+                                          fg_color=ACCENT, button_color=ACCENT_HOVER,
+                                          button_hover_color=ACCENT_HOVER, height=30)
+        self.fps_menu.set("30")
+        self.fps_menu.grid(row=1, column=1, sticky="ew")
+
+        self.blur_slider = self._slider(page, "Background blur", 0, 30, 12)
+        self.dark_slider = self._slider(page, "Background darken", 0, 80, 35)
+
+        self._label(page, "Visualizer position — X / Y / Scale")
+        vrow = ctk.CTkFrame(page, fg_color="transparent")
+        vrow.pack(fill="x", padx=6)
+        vrow.grid_columnconfigure((0, 1, 2), weight=1)
+        self.vis_x = ctk.CTkSlider(vrow, from_=-50, to=50,
+                                   progress_color=ACCENT, button_color=ACCENT)
+        self.vis_x.set(0)
+        self.vis_x.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        self.vis_y = ctk.CTkSlider(vrow, from_=-50, to=50,
+                                   progress_color=ACCENT, button_color=ACCENT)
+        self.vis_y.set(0)
+        self.vis_y.grid(row=0, column=1, sticky="ew", padx=(0, 6))
+        self.vis_scale = ctk.CTkSlider(vrow, from_=30, to=170,
+                                       progress_color=ACCENT, button_color=ACCENT)
+        self.vis_scale.set(100)
+        self.vis_scale.grid(row=0, column=2, sticky="ew")
+        self._grey_btn(page, "↺ Reset position", self._reset_vis_pos, width=120,
+                       height=24, font=ctk.CTkFont(size=11)
+                       ).pack(anchor="w", padx=6, pady=(6, 8))
+
+    def _on_album_tracklist_toggle(self):
+        if self.use_album_tracklist.get():
+            self.title_album_frame.pack(fill="x", padx=6, pady=(4, 4), before=self.title_tip_lbl)
+        else:
+            self.title_album_frame.pack_forget()
+        self._pv_key = None
+
+    def _on_album_style_change(self, val):
+        self._pv_key = None
+
+    def _on_effect_change(self, val):
+        self._pv_key = None
+
+    def _on_effect_intensity(self, val):
+        self._pv_key = None
+
+    def _update_tracklist_preview(self):
+        self.tracklist_preview.configure(state="normal")
+        self.tracklist_preview.delete("1.0", "end")
+        if not self.audio_paths:
+            self.tracklist_preview.insert("1.0", "(No audio files loaded)")
+            self.tracklist_preview.configure(state="disabled")
+            self.cached_tracklist = []
+            return
+            
+        def worker():
+            try:
+                timeline = []
+                cached = []
+                curr = 0.0
+                for path in self.audio_paths:
+                    dur = engine.get_audio_duration(path)
+                    title = os.path.splitext(os.path.basename(path))[0]
+                    cached.append((curr, title))
+                    m, s = divmod(int(curr), 60)
+                    h, m = divmod(m, 60)
+                    time_str = f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
+                    timeline.append(f"{time_str} - {title}")
+                    curr += dur
+                text_summary = "\n".join(timeline)
+                self.after(0, lambda: self._set_tracklist_preview_text(text_summary, cached))
+            except Exception as e:
+                self.after(0, lambda: self._set_tracklist_preview_text(f"Error parsing durations: {e}", []))
+                
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _set_tracklist_preview_text(self, text, cached):
+        self.tracklist_preview.configure(state="normal")
+        self.tracklist_preview.delete("1.0", "end")
+        self.tracklist_preview.insert("1.0", text)
+        self.tracklist_preview.configure(state="disabled")
+        self.cached_tracklist = cached
+
+    def _page_title(self, page):
+        self.title_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(page, text="Show title on the video", variable=self.title_var,
+                        fg_color=ACCENT, hover_color=ACCENT_HOVER
+                        ).pack(anchor="w", padx=6, pady=(8, 4))
+        self.title_entry = ctk.CTkEntry(page, placeholder_text="Title text (ខ្មែរ OK)",
+                                        height=30)
+        self.title_entry.pack(fill="x", padx=6)
+
+        self._label(page, "Font ខ្មែរ")
+        self.title_font_menu = self._menu(page, engine.KHMER_FONT_NAMES,
+                                          engine.DEFAULT_FONT)
+
+        grid = ctk.CTkFrame(page, fg_color="transparent")
+        grid.pack(fill="x", padx=6, pady=(8, 0))
+        grid.grid_columnconfigure((0, 1), weight=1)
+        ctk.CTkLabel(grid, text="Position", font=ctk.CTkFont(size=11, weight="bold")
+                     ).grid(row=0, column=0, sticky="w")
+        self.title_pos_menu = ctk.CTkOptionMenu(
+            grid, values=engine.TITLE_POSITIONS, fg_color=ACCENT,
+            button_color=ACCENT_HOVER, button_hover_color=ACCENT_HOVER, height=30,
+            command=self._on_title_pos_menu)
+        self.title_pos_menu.set("Bottom Center")
+        self.title_pos_menu.grid(row=1, column=0, sticky="ew", padx=(0, 6))
+        ctk.CTkLabel(grid, text="Size", font=ctk.CTkFont(size=11, weight="bold")
+                     ).grid(row=0, column=1, sticky="w")
+        self.title_size = ctk.CTkSlider(grid, from_=0.5, to=2.5,
+                                        progress_color=ACCENT, button_color=ACCENT)
+        self.title_size.set(1.0)
+        self.title_size.grid(row=1, column=1, sticky="ew", pady=(8, 0))
+
+        # ---- Video Effects (moved here from More) ----
+        egrid = ctk.CTkFrame(page, fg_color="transparent")
+        egrid.pack(fill="x", padx=6, pady=(12, 0))
+        egrid.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(egrid, text="🌟 Video Effect",
+                     font=ctk.CTkFont(size=11, weight="bold")
+                     ).grid(row=0, column=0, sticky="w")
+        self.effect_menu = ctk.CTkOptionMenu(
+            egrid, values=engine.EFFECTS, height=30, corner_radius=20,
+            fg_color=ACCENT, button_color=ACCENT_HOVER,
+            button_hover_color=ACCENT_HOVER, command=self._on_effect_change)
+        self.effect_menu.set("None")
+        self.effect_menu.grid(row=1, column=0, sticky="ew")
+        self._label(page, "Effect intensity", pady=(6, 0))
+        self.effect_intensity = ctk.CTkSlider(page, from_=0, to=100,
+                                              progress_color=ACCENT,
+                                              button_color=ACCENT,
+                                              command=self._on_effect_intensity)
+        self.effect_intensity.set(50)
+        self.effect_intensity.pack(fill="x", padx=6, pady=(0, 4))
+
+        # Album Tracklist Overlay tickbox
+        self.use_album_tracklist = ctk.CTkCheckBox(
+            page, text="Enable Album Tracklist Overlay",
+            fg_color=ACCENT, hover_color=ACCENT_HOVER,
+            command=self._on_album_tracklist_toggle)
+        self.use_album_tracklist.pack(anchor="w", padx=6, pady=(12, 4))
+
+        # Album Options Frame (hidden by default)
+        self.title_album_frame = ctk.CTkFrame(page, corner_radius=20, fg_color=CARD,
+                                              border_width=1, border_color=CARD_BORDER)
+        
+        lbl_style = ctk.CTkLabel(self.title_album_frame, text="Track Indicator Style", font=ctk.CTkFont(size=11, weight="bold"))
+        lbl_style.pack(anchor="w", padx=12, pady=(10, 2))
+        
+        self.album_style = ctk.CTkOptionMenu(
+            self.title_album_frame,
+            values=["11. Playlist Cover (YouTube)", "12. Playlist Center Stack",
+                    "13. Playlist Right Panel", "14. Playlist Glass Minimal",
+                    "15. Playlist Glass Right", "16. Playlist Glass Left",
+                    "1. Kinetic Slide-In",
+                    "2. Side Playlist Panel", "3. Live Wave Indicator",
+                    "4. Modern Ticker Bar", "5. Neon Glow Label", "6. Cinematic Corner Stamp",
+                    "7. Top Header Banner", "8. Minimalist Drop Shadow", "9. Centered Focal Board",
+                    "10. Compact Pill Capsule"],
+            fg_color=ACCENT, button_color=ACCENT_HOVER, button_hover_color=ACCENT_HOVER,
+            height=30, corner_radius=20, command=self._on_album_style_change
+        )
+        self.album_style.set("1. Kinetic Slide-In")
+        self.album_style.pack(fill="x", padx=12, pady=(0, 8))
+
+        lbl_preview = ctk.CTkLabel(self.title_album_frame, text="Auto-Calculated Tracklist Preview", font=ctk.CTkFont(size=11, weight="bold"))
+        lbl_preview.pack(anchor="w", padx=12, pady=(4, 2))
+        
+        self.tracklist_preview = ctk.CTkTextbox(self.title_album_frame, height=120, corner_radius=12)
+        self.tracklist_preview.pack(fill="x", padx=12, pady=(0, 12))
+        self.tracklist_preview.insert("1.0", "(No audio files loaded)")
+        self.tracklist_preview.configure(state="disabled")
+
+        self.title_tip_lbl = ctk.CTkLabel(page,
+                                         text="💡 អូស Title លើ Preview ខាងលើ ដើម្បីរំកិលទៅគ្រប់ទីកន្លែង (Position menu = reset)",
+                                         font=ctk.CTkFont(size=11), text_color=MUTED,
+                                         wraplength=400, justify="left")
+        self.title_tip_lbl.pack(anchor="w", padx=6, pady=(8, 8))
+
+    # ---- page: subtitles ----
+
+    def _page_subs(self, page):
+        self.subs_var = ctk.BooleanVar(value=False)
+        self.subs_check = ctk.CTkCheckBox(
+            page, text="Show subtitles on the video", variable=self.subs_var,
+            fg_color=ACCENT, hover_color=ACCENT_HOVER)
+        self.subs_check.pack(anchor="w", padx=6, pady=(8, 4))
+
+        grid = ctk.CTkFrame(page, fg_color="transparent")
+        grid.pack(fill="x", padx=6)
+        grid.grid_columnconfigure((0, 1), weight=1)
+
+        def cell(r, c, label, values, default):
+            ctk.CTkLabel(grid, text=label, font=ctk.CTkFont(size=11, weight="bold")
+                         ).grid(row=r, column=c, sticky="w", pady=(6, 0))
+            menu = ctk.CTkOptionMenu(grid, values=values, fg_color=ACCENT,
+                                     button_color=ACCENT_HOVER,
+                                     button_hover_color=ACCENT_HOVER, height=30)
+            menu.set(default)
+            menu.grid(row=r + 1, column=c, sticky="ew",
+                      padx=(0, 6) if c == 0 else 0)
+            return menu
+
+        self.lang_menu = cell(0, 0, "Language", list(LANGUAGES), "ខ្មែរ (Khmer)")
+        self.model_menu = cell(0, 1, "AI model", ["tiny", "base", "small", "medium"],
+                               "small")
+        self.sub_style_menu = cell(2, 0, "Caption style", engine.SUBTITLE_STYLES,
+                                   engine.SUBTITLE_STYLES[0])
+        self.sub_font_menu = cell(2, 1, "Caption font ខ្មែរ",
+                                  engine.KHMER_FONT_NAMES, engine.DEFAULT_FONT)
+
+        ctk.CTkLabel(grid, text="Caption size", font=ctk.CTkFont(size=11, weight="bold")
+                     ).grid(row=4, column=0, sticky="w", pady=(6, 0))
+        self.sub_size = ctk.CTkSlider(grid, from_=60, to=200,
+                                      progress_color=ACCENT, button_color=ACCENT)
+        self.sub_size.set(100)
+        self.sub_size.grid(row=5, column=0, sticky="ew", padx=(0, 6))
+        ctk.CTkLabel(grid, text="Caption position ↕",
+                     font=ctk.CTkFont(size=11, weight="bold")
+                     ).grid(row=4, column=1, sticky="w", pady=(6, 0))
+        self.sub_pos = ctk.CTkSlider(grid, from_=30, to=95,
+                                     progress_color=ACCENT, button_color=ACCENT)
+        self.sub_pos.set(80)
+        self.sub_pos.grid(row=5, column=1, sticky="ew")
+
+        self.gen_subs_btn = ctk.CTkButton(
+            page, text="🎙 Auto Captions — Generate", height=36, corner_radius=20,
+            fg_color=ACCENT, hover_color=ACCENT_HOVER, command=self._generate_subs)
+        self.gen_subs_btn.pack(fill="x", padx=6, pady=(10, 4))
+
+        brow = ctk.CTkFrame(page, fg_color="transparent")
+        brow.pack(fill="x", padx=6)
+        for text, cmd in (("📝 Edit", self._edit_subs),
+                          ("📂 Import SRT", self._import_srt),
+                          ("💾 Export", self._export_srt)):
+            self._grey_btn(brow, text, cmd, height=28
+                           ).pack(side="left", fill="x", expand=True, padx=2)
+
+        self.subs_info = ctk.CTkLabel(
+            page, text="Auto Captions: បំលែងសំឡេងចម្រៀង/និយាយ ទៅជាអក្សរតាមពេលវេលា ដូច CapCut។",
+            font=ctk.CTkFont(size=11), text_color=MUTED, wraplength=400,
+            justify="left")
+        self.subs_info.pack(anchor="w", padx=6, pady=(6, 8))
+
+    # ---- page: AI Studio ----
+
+    def _page_ai_studio(self, page):
+        # AI Stem Splitter Card
+        card_splitter = ctk.CTkFrame(page, corner_radius=20, fg_color=CARD,
+                                     border_width=1, border_color=CARD_BORDER)
+        card_splitter.pack(fill="x", padx=6, pady=(6, 6))
+
+        # Title and description
+        ctk.CTkLabel(card_splitter, text="🎙️ Vocal Isolation",
+                     font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=14, pady=(12, 4))
+
+        ctk.CTkLabel(card_splitter,
+                     text="Extract center-channel vocals from a stereo song to clean up the audio and improve Auto Captions accuracy. (Fast, real ffmpeg DSP — not heavy AI separation.)",
+                     font=ctk.CTkFont(size=11), text_color=MUTED,
+                     wraplength=390, justify="left").pack(anchor="w", padx=14, pady=(0, 10))
+
+        # Progress bar & status
+        self.stem_progress_bar = ctk.CTkProgressBar(card_splitter, height=6, corner_radius=10, progress_color=ACCENT)
+        self.stem_progress_bar.set(0)
+        self.stem_progress_bar.pack(fill="x", padx=14, pady=(0, 4))
+
+        self.stem_status_lbl = ctk.CTkLabel(card_splitter, text="Status: Ready to isolate vocals",
+                                            font=ctk.CTkFont(size=11), text_color=MUTED)
+        self.stem_status_lbl.pack(anchor="w", padx=14, pady=(0, 10))
+
+        self.stem_split_btn = ctk.CTkButton(card_splitter, text="⚡ Isolate Vocals", height=36, corner_radius=20,
+                                            fg_color=ACCENT, hover_color=ACCENT_HOVER,
+                                            command=self._run_stem_splitter)
+        self.stem_split_btn.pack(fill="x", padx=14, pady=(0, 14))
+
+        # Audio Studio Workshop Card
+        card_workshop = ctk.CTkFrame(page, corner_radius=20, fg_color=CARD,
+                                     border_width=1, border_color=CARD_BORDER)
+        card_workshop.pack(fill="x", padx=6, pady=(6, 6))
+
+        ctk.CTkLabel(card_workshop, text="🎛️ Audio Studio Controls",
+                     font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=14, pady=(12, 10))
+
+        # Vocal Volume Slider
+        self.vocal_vol_lbl = ctk.CTkLabel(card_workshop, text="Output Volume: 100%", font=ctk.CTkFont(size=11, weight="bold"))
+        self.vocal_vol_lbl.pack(anchor="w", padx=14, pady=(4, 0))
+        self.vocal_vol_slider = ctk.CTkSlider(card_workshop, from_=0, to=100, progress_color=ACCENT, button_color=ACCENT,
+                                              command=self._on_vocal_vol_change)
+        self.vocal_vol_slider.set(self.vocal_volume)
+        self.vocal_vol_slider.pack(fill="x", padx=14, pady=(0, 10))
+
+        # Music Bass Boost Slider
+        self.bass_boost_lbl = ctk.CTkLabel(card_workshop, text="Music Bass Boost: 0%", font=ctk.CTkFont(size=11, weight="bold"))
+        self.bass_boost_lbl.pack(anchor="w", padx=14, pady=(4, 0))
+        self.bass_boost_slider = ctk.CTkSlider(card_workshop, from_=0, to=100, progress_color=ACCENT, button_color=ACCENT,
+                                               command=self._on_bass_boost_change)
+        self.bass_boost_slider.set(self.bass_boost)
+        self.bass_boost_slider.pack(fill="x", padx=14, pady=(0, 10))
+
+        # Reverb Slider
+        self.reverb_lbl = ctk.CTkLabel(card_workshop, text="Studio Reverb: 0%", font=ctk.CTkFont(size=11, weight="bold"))
+        self.reverb_lbl.pack(anchor="w", padx=14, pady=(4, 0))
+        self.reverb_slider = ctk.CTkSlider(card_workshop, from_=0, to=100, progress_color=ACCENT, button_color=ACCENT,
+                                            command=self._on_reverb_change)
+        self.reverb_slider.set(self.reverb)
+        self.reverb_slider.pack(fill="x", padx=14, pady=(0, 14))
+
+        # Auto Enhancer
+        ctk.CTkLabel(card_workshop, text="✨ Sample Auto Enhancer", font=ctk.CTkFont(size=11, weight="bold")
+                     ).pack(anchor="w", padx=14, pady=(4, 2))
+        
+        enhancer_values = ['Disable', 'Pro Vocal Boost', 'Clear Clear', 'Loudness Normalize', 'Noise Cancel']
+        self.enhancer_menu = ctk.CTkOptionMenu(card_workshop, values=enhancer_values, fg_color=ACCENT,
+                                               button_color=ACCENT_HOVER, button_hover_color=ACCENT_HOVER,
+                                               height=30, corner_radius=20, command=self._on_enhancer_change)
+        self.enhancer_menu.set(self.enhancer)
+        self.enhancer_menu.pack(fill="x", padx=14, pady=(0, 14))
+
+        # Mix Master Card
+        card_master = ctk.CTkFrame(page, corner_radius=20, fg_color=CARD,
+                                   border_width=1, border_color=CARD_BORDER)
+        card_master.pack(fill="x", padx=6, pady=(6, 6))
+        ctk.CTkLabel(card_master, text="🎚️ Mix Master",
+                     font=ctk.CTkFont(size=14, weight="bold")
+                     ).pack(anchor="w", padx=14, pady=(12, 2))
+        ctk.CTkLabel(card_master,
+                     text="Streaming-ready mastering chain (compressor → EQ → loudness → limiter). Applies on export with 256k audio.",
+                     font=ctk.CTkFont(size=11), text_color=MUTED,
+                     wraplength=390, justify="left").pack(anchor="w", padx=14,
+                                                          pady=(0, 8))
+        self.master_menu = ctk.CTkOptionMenu(
+            card_master, values=list(engine.MASTER_PRESETS), height=30,
+            corner_radius=20, fg_color=ACCENT, button_color=ACCENT_HOVER,
+            button_hover_color=ACCENT_HOVER, command=self._on_master_change)
+        self.master_menu.set(self.master_preset)
+        self.master_menu.pack(fill="x", padx=14, pady=(0, 14))
+
+    def _on_vocal_vol_change(self, val):
+        self.vocal_volume = float(val)
+        self.vocal_vol_lbl.configure(text=f"Output Volume: {int(val)}%")
+
+    def _on_bass_boost_change(self, val):
+        self.bass_boost = float(val)
+        self.bass_boost_lbl.configure(text=f"Music Bass Boost: {int(val)}%")
+
+    def _on_reverb_change(self, val):
+        self.reverb = float(val)
+        self.reverb_lbl.configure(text=f"Studio Reverb: {int(val)}%")
+
+    def _on_enhancer_change(self, val):
+        self.enhancer = val
+
+    def _on_master_change(self, val):
+        self.master_preset = val
+
+    def _remove_watermark(self):
+        self.watermark_path = None
+        self.wm_btn.configure(text="🖼 Add logo…")
+        self._pv_key = None
+        self._status("Watermark removed.")
+
+    def _run_stem_splitter(self):
+        if not self.audio_paths:
+            messagebox.showwarning("No Audio", "Please load an audio file first in the 'Files' tab.")
+            return
+        src = self.audio_paths[0]
+        out_path = os.path.splitext(src)[0] + "_vocals.wav"
+
+        self.stem_split_btn.configure(state="disabled")
+        self.stem_progress_bar.set(0.15)
+        self.stem_status_lbl.configure(text="Status: Isolating vocals…")
+
+        def run():
+            try:
+                engine.isolate_vocals(
+                    src, out_path,
+                    progress_cb=lambda m: self.after(0, self._update_stem_progress,
+                                                     "Status: " + m, 0.6))
+                self.after(0, self._on_stem_split_complete, out_path, None)
+            except Exception as exc:
+                self.after(0, self._on_stem_split_complete, None, str(exc))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _update_stem_progress(self, msg, progress):
+        self.stem_status_lbl.configure(text=msg)
+        self.stem_progress_bar.set(progress)
+
+    def _on_stem_split_complete(self, out_path, error):
+        self.stem_split_btn.configure(state="normal")
+        if error:
+            self.stem_progress_bar.set(0)
+            self.stem_status_lbl.configure(text="Status: Isolation failed.")
+            messagebox.showwarning("Vocal Isolation", error)
+            return
+        self.stem_progress_bar.set(1.0)
+        self.vocal_isolated_path = out_path
+        self.stem_status_lbl.configure(
+            text="Status: ✅ Vocals saved — will be used for Auto Captions.")
+        messagebox.showinfo(
+            "Vocal Isolation",
+            "Center-channel vocals isolated and saved to:\n" + out_path +
+            "\n\nAuto Captions will now transcribe from these cleaner vocals.")
+
+    # ---- page: extras ----
+
+    def _page_extras(self, page):
+        self.zoom_var = ctk.BooleanVar(value=False)
+        self.pbar_var = ctk.BooleanVar(value=True)
+        self.fade_var = ctk.BooleanVar(value=True)
+        self.gpu_var = ctk.BooleanVar(value=True)
+        for text, var in (("Beat zoom (background pulses with bass)", self.zoom_var),
+                          ("Progress bar on the video", self.pbar_var),
+                          ("Fade in/out (video + audio)", self.fade_var),
+                          ("Use GPU Hardware Acceleration", self.gpu_var)):
+            ctk.CTkCheckBox(page, text=text, variable=var, fg_color=ACCENT,
+                            hover_color=ACCENT_HOVER).pack(anchor="w", padx=6,
+                                                           pady=(8, 0))
+
+        self._label(page, "Logo / Watermark", pady=(12, 2))
+        wrow = ctk.CTkFrame(page, fg_color="transparent")
+        wrow.pack(fill="x", padx=6, pady=(0, 8))
+        self.wm_btn = self._grey_btn(wrow, "🖼 Add logo…", self._choose_watermark,
+                                     height=30)
+        self.wm_btn.pack(side="left", fill="x", expand=True)
+        self.wm_corner_menu = ctk.CTkOptionMenu(
+            wrow, values=["Top Left", "Top Right", "Bottom Left", "Bottom Right"],
+            width=118, height=30, fg_color=ACCENT, button_color=ACCENT_HOVER,
+            button_hover_color=ACCENT_HOVER)
+        self.wm_corner_menu.set("Top Right")
+        self.wm_corner_menu.pack(side="left", padx=(6, 0))
+        self._grey_btn(wrow, "✕", self._remove_watermark, width=30,
+                       height=30).pack(side="left", padx=(6, 0))
+
+    # ---------------- file handlers ----------------
+
+    def _set_image(self, path):
+        self.image_path = path
+        self._pv_key = None
+        self._status("Image loaded." if not self.audio_paths
+                     else "Ready — press ▶ to preview or Create Video.")
+
+    def _set_audio(self, paths):
+        if not isinstance(paths, (list, tuple)):
+            paths = [paths]
+        self.audio_paths = list(paths)
+        self.analysis = None
+        self.vocal_isolated_path = None
+        self._stop_sound()
+        self._pv_playing = False
+        self._pv_t = 0.0
+        self._pv_key = None
+        self._refresh_track_rows()
+        if self.audio_paths:
+            first_path = self.audio_paths[0]
+            if not self.title_entry.get().strip():
+                self.title_entry.insert(0, os.path.splitext(os.path.basename(first_path))[0])
+            self._status("Analyzing audio…")
+            self._analyzing = True
+            threading.Thread(target=self._analyze_worker, args=(self.audio_paths,), daemon=True).start()
+
+    # ---- Tracklist Manager ----
+
+    def _refresh_track_rows(self):
+        if not hasattr(self, "tracks_rows"):
+            return
+        for child in self.tracks_rows.winfo_children():
+            child.destroy()
+        n = len(self.audio_paths)
+        self.tracks_count_lbl.configure(text=f"{n} song{'s' if n != 1 else ''}")
+        if not n:
+            ctk.CTkLabel(self.tracks_rows, text="Drop songs above — order = play order",
+                         font=ctk.CTkFont(size=11), text_color=MUTED
+                         ).pack(anchor="w", padx=6, pady=4)
+            return
+        for i, p in enumerate(self.audio_paths):
+            row = ctk.CTkFrame(self.tracks_rows, fg_color="transparent")
+            row.pack(fill="x", pady=1)
+            name = os.path.splitext(os.path.basename(p))[0]
+            if len(name) > 30:
+                name = name[:29] + "…"
+            ctk.CTkLabel(row, text=f"{i + 1:02d}", width=26,
+                         font=ctk.CTkFont(size=11, weight="bold"),
+                         text_color=(ACCENT, "#c4b5fd")).pack(side="left")
+            ctk.CTkLabel(row, text=name, anchor="w",
+                         font=ctk.CTkFont(size=11)).pack(side="left", fill="x",
+                                                         expand=True)
+            for txt, cmd, ok in (("▲", lambda i=i: self._track_move(i, -1), i > 0),
+                                 ("▼", lambda i=i: self._track_move(i, 1), i < n - 1),
+                                 ("✕", lambda i=i: self._track_remove(i), True)):
+                ctk.CTkButton(row, text=txt, width=24, height=20, corner_radius=8,
+                              font=ctk.CTkFont(size=10),
+                              fg_color=("#e5e3db", "#242a33"),
+                              hover_color=("#d5d3cb", "#323a46"),
+                              text_color=("#111827", "#e5e7eb"),
+                              state="normal" if ok else "disabled",
+                              command=cmd).pack(side="left", padx=1)
+
+    def _apply_track_changes(self):
+        if self.audio_paths:
+            self.audio_zone.set_files(list(self.audio_paths))
+        else:
+            self.analysis = None
+            self._stop_sound()
+            self._pv_playing = False
+            self._pv_key = None
+            self.audio_zone.path = None
+            self.audio_zone.file_lbl.configure(
+                text="No file selected — click to browse", text_color=MUTED)
+            self.audio_zone.configure(border_color=CARD_BORDER)
+            self._refresh_track_rows()
+            self._update_tracklist_preview()
+            self._status("Tracklist cleared.")
+
+    def _track_move(self, i, delta):
+        j = i + delta
+        if 0 <= j < len(self.audio_paths):
+            self.audio_paths[i], self.audio_paths[j] = \
+                self.audio_paths[j], self.audio_paths[i]
+            self._apply_track_changes()
+
+    def _track_remove(self, i):
+        del self.audio_paths[i]
+        self._apply_track_changes()
+
+    def _tracks_add(self):
+        patterns = " ".join("*" + e for e in sorted(AUDIO_EXTS))
+        ps = filedialog.askopenfilenames(filetypes=[("Audio files", patterns)])
+        if ps:
+            self.audio_paths.extend(ps)
+            self._apply_track_changes()
+
+    def _tracks_clear(self):
+        self.audio_paths = []
+        self._apply_track_changes()
+
+    def _analyze_worker(self, paths):
+        try:
+            an = engine.analyze(paths, PREVIEW_FPS)
+            self.after(0, self._on_analysis, paths, an)
+        except Exception as exc:
+            self.after(0, self._on_analysis_error, str(exc))
+
+    def _on_analysis(self, paths, an):
+        if paths != self.audio_paths:
+            return
+        self.analysis = an
+        self._analyzing = False
+        self._pv_key = None
+        self.seek.configure(to=max(0.1, an.duration))
+        self._status("Ready — press ▶ to preview or Create Video. 🚀")
+        self._update_tracklist_preview()
+
+    def _on_analysis_error(self, msg):
+        self._analyzing = False
+        self._status("❌ Audio error.")
+        messagebox.showerror("Audio error", msg)
+
+    def _on_res_change(self, value):
+        if value == engine.RES_CUSTOM:
+            CustomSizeDialog(self, self.custom_size, self._set_custom_size)
+        self._pv_key = None
+
+    def _set_custom_size(self, size):
+        self.custom_size = engine.even_size(size)
+        self._pv_key = None
+        self._status(f"Custom size: {self.custom_size[0]}×{self.custom_size[1]}")
+
+    def _current_size(self):
+        sel = self.res_menu.get()
+        if sel == engine.RES_ORIGINAL:
+            if self.image_path:
+                try:
+                    return engine.size_from_image(self.image_path)
+                except Exception:
+                    pass
+            return (1920, 1080)
+        if sel == engine.RES_CUSTOM:
+            return self.custom_size
+        return engine.RESOLUTIONS[sel]
+
+    def _choose_watermark(self):
+        p = filedialog.askopenfilename(
+            filetypes=[("Image", "*.png *.jpg *.jpeg *.webp")])
+        if p:
+            self.watermark_path = p
+            self.wm_btn.configure(text="🖼 " + os.path.basename(p)[:22])
+            self._pv_key = None
+
+    def _open_custom(self):
+        self.style_menu.set("Custom")
+        CustomStyleDialog(self, self.custom_cfg, lambda: None)
+
+    def _refresh_khmer_status(self):
+        mode = engine.khmer_shaping_mode()
+        if mode == "none":
+            self.khmer_status_lbl.configure(
+                text="⚠️ អក្សរខ្មែរនឹងរាយខុស (ជើង/ស្រៈខុសកន្លែង) — ចុចប៊ូតុងខាងក្រោម "
+                     "ដើម្បីដោះស្រាយភ្លាមៗ (មិនចាំបាច់ restart)",
+                text_color=("#b91c1c", "#f87171"))
+            self.fix_khmer_btn.pack(fill="x", padx=6, pady=(4, 6))
+        else:
+            engine_name = "HarfBuzz" if mode == "harfbuzz" else "Pillow Raqm"
+            self.khmer_status_lbl.configure(
+                text=f"✅ Khmer text shaping: {engine_name} — អក្សរខ្មែរត្រឹមត្រូវ (ជើង/ស្រៈ)",
+                text_color=("#047857", "#34d399"))
+            self.fix_khmer_btn.pack_forget()
+
+    def _fix_khmer(self):
+        self.fix_khmer_btn.configure(state="disabled", text="🛠 Installing…")
+
+        def worker():
+            try:
+                engine.install_khmer_shaper(
+                    progress_cb=lambda m: self.after(0, self._status, m))
+                self.after(0, self._on_khmer_fixed, None)
+            except Exception as exc:
+                self.after(0, self._on_khmer_fixed, str(exc))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_khmer_fixed(self, error):
+        self.fix_khmer_btn.configure(state="normal",
+                                     text="🛠 Fix អក្សរខ្មែរឥឡូវនេះ (auto install)")
+        if error:
+            self._status("Khmer fix failed.")
+            messagebox.showwarning("Fix Khmer", error)
+        else:
+            self._status("✅ Khmer shaper installed — អក្សរខ្មែរត្រឹមត្រូវហើយ!")
+            self._pv_key = None  # redraw preview with the new shaper
+        self._refresh_khmer_status()
+
+    def _reset_vis_pos(self):
+        self.vis_x.set(0)
+        self.vis_y.set(0)
+        self.vis_scale.set(100)
+
+    def _on_title_pos_menu(self, _value):
+        self.title_custom = None  # preset chosen -> stop free positioning
+
+    def _on_preview_drag(self, event):
+        """Drag the title anywhere on the live preview."""
+        if not self.title_var.get() or self._pv_disp_size is None:
+            return
+        pw, ph = self._pv_disp_size
+        lw = max(1, self.preview_lbl.winfo_width())
+        lh = max(1, self.preview_lbl.winfo_height())
+        fx = (event.x - (lw - pw) / 2) / pw
+        fy = (event.y - (lh - ph) / 2) / ph
+        self.title_custom = (min(0.98, max(0.02, fx)),
+                             min(0.97, max(0.03, fy)))
+
+    # ---------------- subtitles ----------------
+
+    def _generate_subs(self):
+        if not self.audio_paths:
+            messagebox.showwarning("No audio", "Drop an audio file first.")
+            return
+        need_install = not engine.whisper_available()
+        if need_install:
+            if getattr(sys, "frozen", False):
+                messagebox.showwarning(
+                    "Auto Captions",
+                    "This build doesn't include the AI caption engine.\n"
+                    "Use '📂 Import SRT' instead, or ask for a build with "
+                    "faster-whisper included.")
+                return
+            if not messagebox.askyesno(
+                    "Auto Captions — one-time setup",
+                    "AI caption engine (faster-whisper) មិនទាន់មាននៅឡើយ។\n\n"
+                    "ទាញយក និង install ឥឡូវនេះ? (~100 MB, ម្តងគត់)\n"
+                    "បន្ទាប់មក Auto Captions នឹងដំណើរការភ្លាម។"):
+                return
+        self.gen_subs_btn.configure(state="disabled", text="🎙 Working…")
+        lang = LANGUAGES[self.lang_menu.get()]
+        model = self.model_menu.get()
+
+        def worker():
+            try:
+                if need_install:
+                    engine.install_whisper(
+                        progress_cb=lambda m: self.after(0, self._status, m))
+                # prefer isolated vocals (cleaner) when the user made them
+                trans_src = self.audio_paths[0]
+                if self.vocal_isolated_path and os.path.exists(self.vocal_isolated_path):
+                    trans_src = self.vocal_isolated_path
+                subs = engine.transcribe(
+                    trans_src, language=lang, model_size=model,
+                    progress_cb=lambda m: self.after(0, self._status, "🎙 " + m))
+                self.after(0, self._on_subs_ready, subs)
+            except ImportError as exc:
+                self.after(0, self._on_subs_error, str(exc), True)
+            except Exception as exc:
+                traceback.print_exc()
+                self.after(0, self._on_subs_error, str(exc), False)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_subs_ready(self, subs):
+        self.gen_subs_btn.configure(state="normal", text="🎙 Auto Captions — Generate")
+        self.subtitles = subs
+        if subs:
+            self.subs_var.set(True)
+            self.subs_info.configure(text=f"✅ {len(subs)} subtitle lines ready — tick 'Show subtitles'. Use 📝 Edit to fix words.")
+            self._status(f"Subtitles ready: {len(subs)} lines.")
+        else:
+            self.subs_info.configure(text="No speech detected in this audio.")
+            self._status("No speech detected.")
+
+    def _on_subs_error(self, msg, is_install):
+        self.gen_subs_btn.configure(state="normal", text="🎙 Auto Captions — Generate")
+        self._status("Subtitle generation failed.")
+        messagebox.showwarning("AI subtitles" if is_install else "Subtitle error", msg)
+
+    def _edit_subs(self):
+        SubtitleEditor(self, self.subtitles, self._on_subs_saved)
+
+    def _on_subs_saved(self, subs):
+        self.subtitles = subs
+        self.subs_info.configure(text=f"✏️ {len(subs)} subtitle lines.")
+        if subs:
+            self.subs_var.set(True)
+
+    def _import_srt(self):
+        p = filedialog.askopenfilename(filetypes=[("SubRip subtitles", "*.srt"),
+                                                  ("All files", "*.*")])
+        if not p:
+            return
+        try:
+            with open(p, encoding="utf-8-sig") as fh:
+                self.subtitles = engine.parse_srt(fh.read())
+        except Exception as exc:
+            messagebox.showerror("SRT error", str(exc))
+            return
+        self.subs_var.set(bool(self.subtitles))
+        self.subs_info.configure(text=f"📂 Imported {len(self.subtitles)} lines.")
+
+    def _export_srt(self):
+        if not self.subtitles:
+            messagebox.showwarning("No subtitles", "Nothing to export yet.")
+            return
+        p = filedialog.asksaveasfilename(defaultextension=".srt",
+                                         filetypes=[("SubRip subtitles", "*.srt")])
+        if p:
+            with open(p, "w", encoding="utf-8") as fh:
+                fh.write(engine.format_srt(self.subtitles))
+            self._status(f"Subtitles saved: {p}")
+
+    # ---------------- options ----------------
+
+    def _current_opts(self):
+        return {
+            "style": self.style_menu.get(),
+            "size": self._current_size(),
+            "fps": int(self.fps_menu.get()),
+            "theme": self.theme_menu.get(),
+            "blur": float(self.blur_slider.get()),
+            "darken": float(self.dark_slider.get()) / 100.0,
+            "beat_zoom": self.zoom_var.get(),
+            "show_title": self.title_var.get(),
+            "title_text": self.title_entry.get().strip(),
+            "title_pos": self.title_pos_menu.get(),
+            "title_scale": float(self.title_size.get()),
+            "title_font": self.title_font_menu.get(),
+            "title_custom": self.title_custom,
+            "sub_font": self.sub_font_menu.get(),
+            "sub_scale": float(self.sub_size.get()) / 100.0,
+            "sub_y": float(self.sub_pos.get()) / 100.0,
+            "vis_dx": float(self.vis_x.get()) / 100.0,
+            "vis_dy": float(self.vis_y.get()) / 100.0,
+            "vis_scale": float(self.vis_scale.get()) / 100.0,
+            "show_subs": self.subs_var.get(),
+            "subtitles": self.subtitles,
+            "sub_style": self.sub_style_menu.get(),
+            "progress_bar": self.pbar_var.get(),
+            "fade": self.fade_var.get(),
+            "watermark_path": self.watermark_path,
+            "watermark_corner": self.wm_corner_menu.get(),
+            "watermark_opacity": 0.85,
+            "custom": self.custom_cfg,
+            "use_gpu": self.gpu_var.get(),
+            "audio_paths": self.audio_paths,
+            "use_tracklist": self.use_album_tracklist.get(),
+            "album_style": self.album_style.get(),
+            "track_timeline": self.cached_tracklist,
+            # Audio Studio controls -> real ffmpeg audio filters on export
+            "vocal_volume": self.vocal_volume,
+            "bass_boost": self.bass_boost,
+            "reverb": self.reverb,
+            "enhancer": self.enhancer,
+            "master": self.master_preset,
+            # Video effects
+            "effect": self.effect_menu.get(),
+            "effect_intensity": float(self.effect_intensity.get()),
+        }
+
+    # ---------------- live preview ----------------
+
+    def _preview_size(self):
+        w, h = self._current_size()
+        avail = self.winfo_width()
+        if avail < 160:                       # widget not mapped yet
+            avail = 440
+        pw = min(640, max(240, avail - 64))
+        pw = pw // 20 * 20                    # steady cache key while resizing
+        ph = int(pw * h / w)
+        wh = self.winfo_height()
+        max_h = 300 if wh < 300 else max(220, min(340, int(wh * 0.34)))
+        if ph > max_h:
+            ph = max_h
+            pw = int(ph * w / h)
+        return (max(2, pw // 2 * 2), max(2, ph // 2 * 2))
+
+    def _preview_assets(self, opts):
+        if self.image_path is None or self.analysis is None:
+            return None
+        key = (self.image_path, tuple(self.audio_paths), self._preview_size(),
+               round(opts["blur"], 1), round(opts["darken"], 2),
+               opts["beat_zoom"], opts["style"] in engine.NEEDS_CENTER_ART,
+               self.watermark_path)
+        if key != self._pv_key:
+            try:
+                self._pv_assets = engine.prepare_assets(
+                    self.image_path, self.analysis, self._preview_size(), opts)
+                self._pv_key = key
+            except Exception:
+                traceback.print_exc()
+                return None
+        return self._pv_assets
+
+    def _preview_tick(self):
+        try:
+            self._preview_frame()
+        except Exception:
+            traceback.print_exc()
+        self.after(40, self._preview_tick)
+
+    def _preview_frame(self):
+        """UI-thread part of the preview: advance time, decide whether a new
+        frame is needed, then hand composition to a worker thread so button
+        clicks and sliders never wait on rendering."""
+        if self.image_path is None:
+            return
+        an = self.analysis
+        now = time.monotonic()
+        if self._pv_playing and an is not None:
+            if self._pv_last_tick is not None:
+                self._pv_t += now - self._pv_last_tick
+            if self._pv_t >= an.duration:
+                self._pv_t = 0.0
+                self._pause_preview()
+        self._pv_last_tick = now
+
+        if self._pv_busy:
+            return                       # previous frame still rendering: skip
+        opts = self._current_opts()
+        opts["fade"] = False   # fade only affects the export; keep preview bright
+
+        if not self._pv_playing and self._pv_last_opts == opts \
+                and self._pv_last_t == self._pv_t:
+            return
+        self._pv_last_opts = dict(opts)
+        self._pv_last_t = self._pv_t
+
+        if an is not None:
+            if not self._seek_dragging:
+                self.seek.set(self._pv_t)
+            self.time_lbl.configure(
+                text=f"{_fmt_clock(self._pv_t)} / {_fmt_clock(an.duration)}")
+
+        self._pv_busy = True
+        t_snapshot = self._pv_t
+        threading.Thread(target=self._pv_compose_worker,
+                         args=(an, opts, t_snapshot), daemon=True).start()
+
+    def _pv_compose_worker(self, an, opts, t):
+        """Compose the preview frame off the Tk main thread."""
+        try:
+            if an is None:
+                frame = engine.build_background(
+                    self.image_path, self._preview_size(),
+                    opts["blur"], opts["darken"])
+            else:
+                assets = self._preview_assets(opts)
+                if assets is None:
+                    self.after(0, self._pv_show, None)
+                    return
+                i = min(an.num_frames - 1, int(t * PREVIEW_FPS))
+                frame = engine.compose_frame(assets, i, opts)
+            self.after(0, self._pv_show, frame)
+        except Exception:
+            traceback.print_exc()
+            self.after(0, self._pv_show, None)
+
+    def _pv_show(self, frame):
+        self._pv_busy = False
+        if frame is None:
+            return
+        photo = ctk.CTkImage(light_image=frame, dark_image=frame, size=frame.size)
+        self._pv_photo = photo
+        self._pv_disp_size = frame.size
+        self.preview_lbl.configure(image=photo, text="")
+
+    def _toggle_play(self):
+        if self.analysis is None:
+            if self._analyzing:
+                self._status("Still analyzing audio — a moment…")
+            else:
+                messagebox.showwarning("No audio", "Drop an audio file first.")
+            return
+        if self._pv_playing:
+            self._pause_preview()
+        else:
+            self._pv_playing = True
+            self._pv_last_tick = time.monotonic()
+            self.play_btn.configure(text="⏸")
+            self._start_sound(self._pv_t)
+
+    def _pause_preview(self):
+        self._pv_playing = False
+        self.play_btn.configure(text="▶")
+        self._stop_sound()
+
+    def _set_seek_drag(self, flag):
+        self._seek_dragging = flag
+
+    def _seek_release(self, _event):
+        self._seek_dragging = False
+        if self.analysis is None:
+            return
+        self._pv_t = min(float(self.seek.get()), self.analysis.duration)
+        if self._pv_playing:
+            self._start_sound(self._pv_t)
+
+    def _on_seek_scroll(self, val):
+        if self.analysis is not None:
+            self._pv_t = min(float(val), self.analysis.duration)
+
+    def _start_sound(self, t):
+        if not HAS_SOUND or not self.audio_paths:
+            return
+        try:
+            if not self._sound_ready:
+                pygame.mixer.init()
+                self._sound_ready = True
+            pygame.mixer.music.load(self.audio_paths[0])
+            pygame.mixer.music.play(start=t)
+        except Exception:
+            pass  # unsupported codec -> silent preview
+
+    def _stop_sound(self):
+        if HAS_SOUND and self._sound_ready:
+            try:
+                pygame.mixer.music.stop()
+            except Exception:
+                pass
+
+    # ---------------- export ----------------
+
+    def _status(self, text):
+        self.status_lbl.configure(text=text)
+
+    def _start_render(self):
+        if self._worker and self._worker.is_alive():
+            return
+        if not self._licensed:
+            messagebox.showwarning(
+                "License required",
+                "មុខងារត្រូវបានចាក់សោ។ សូមចុច 🔑 ដើម្បី Activate ជាមុនសិន។\n"
+                "(Locked — activate a license first.)")
+            self._open_license()
+            return
+        if not self.image_path or not self.audio_paths:
+            messagebox.showwarning("Missing files",
+                                   "Please add both an image and at least one audio file first.")
+            return
+        default_name = os.path.splitext(os.path.basename(self.audio_paths[0]))[0] + "_visualizer.mp4"
+        out_path = filedialog.asksaveasfilename(
+            defaultextension=".mp4", initialfile=default_name,
+            filetypes=[("MP4 video", "*.mp4")])
+        if not out_path:
+            return
+
+        self._pause_preview()
+        opts = self._current_opts()
+        if self.analysis is not None and self.analysis.fps == opts["fps"]:
+            opts["_analysis"] = self.analysis
+
+        self._cancel.clear()
+        self._last_output = None
+        self.render_btn.configure(state="disabled")
+        self.cancel_btn.configure(state="normal")
+        self.open_btn.configure(state="disabled")
+        self.progress.set(0)
+        self._status("Rendering…")
+
+        # modern circular render popup (blurred backdrop + timer/ETA)
+        self._overlay = RenderOverlay(self, on_cancel=self._cancel.set)
+
+        self._worker = threading.Thread(
+            target=self._render_worker,
+            args=(self.image_path, self.audio_paths, out_path, opts), daemon=True)
+        self._worker.start()
+
+    def _close_overlay(self):
+        if getattr(self, "_overlay", None) is not None:
+            self._overlay.close()
+            self._overlay = None
+
+    def _render_worker(self, image_path, audio_paths, out_path, opts):
+        try:
+            engine.render_video(
+                image_path, audio_paths, out_path, opts,
+                progress_cb=lambda a, b: self.after(0, self._on_progress, a, b),
+                cancel_event=self._cancel)
+            self.after(0, self._on_done, out_path)
+        except InterruptedError:
+            self.after(0, self._on_cancelled)
+        except Exception as exc:
+            traceback.print_exc()
+            self.after(0, self._on_error, str(exc))
+
+    def _on_progress(self, done, total):
+        self.progress.set(done / total)
+        self._status(f"Rendering… frame {done}/{total} ({done * 100 // total}%)")
+        if getattr(self, "_overlay", None) is not None:
+            if done >= total:
+                self._overlay.set_progress(done, total, "Rendering frame")
+                self._overlay.set_stage("Finalizing video…")
+            else:
+                self._overlay.set_progress(done, total, "Rendering frame")
+
+    def _on_done(self, out_path):
+        self._close_overlay()
+        self._last_output = out_path
+        self.progress.set(1)
+        self._status(f"✅ Done!  Saved: {out_path}")
+        self.render_btn.configure(state="normal")
+        self.cancel_btn.configure(state="disabled")
+        self.open_btn.configure(state="normal")
+
+    def _on_cancelled(self):
+        self._close_overlay()
+        self.progress.set(0)
+        self._status("Render cancelled.")
+        self.render_btn.configure(state="normal")
+        self.cancel_btn.configure(state="disabled")
+
+    def _on_error(self, msg):
+        self._close_overlay()
+        self.progress.set(0)
+        self._status("❌ Render failed.")
+        self.render_btn.configure(state="normal")
+        self.cancel_btn.configure(state="disabled")
+        messagebox.showerror("Visualizer error", msg)
+
+    def _open_output(self):
+        if not self._last_output or not os.path.exists(self._last_output):
+            return
+        if os.name == "nt":
+            subprocess.Popen(["explorer", "/select,", os.path.normpath(self._last_output)])
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", "-R", self._last_output])
+        else:
+            subprocess.Popen(["xdg-open", os.path.dirname(self._last_output)])
+
+
+# --------------------------------------------------------------------------
+# Integration helpers
+# --------------------------------------------------------------------------
+
+def add_visualizer_tab(tabview, title=TAB_TITLE):
+    """Add the Visualizer as a new tab on a CTkTabview (call after AI Song)."""
+    tab = tabview.add(title)
+    VisualizerFrame(tab).pack(fill="both", expand=True)
+    return tab
+
+
+def enable_dnd(root):
+    """Enable tkinterdnd2 drag & drop on an existing CTk/Tk root window."""
+    if not HAS_DND:
+        return False
+    try:
+        root.TkdndVersion = TkinterDnD._require(root)
+        return True
+    except Exception:
+        return False
+
+
+def _set_app_icon(app):
+    """Set the window/taskbar icon from assets/logo.png (best-effort)."""
+    import tkinter
+    for rel in ("../assets/logo.png", "assets/logo.png"):
+        path = os.path.join(os.path.dirname(__file__), rel)
+        if os.path.exists(path):
+            try:
+                app._icon_img = tkinter.PhotoImage(file=path)
+                app.iconphoto(True, app._icon_img)
+                return
+            except Exception:
+                pass
+
+
+def run_standalone(argv=None):
+    """Run the visualizer as its own window.
+
+    Optional prefill args (used by the TRAVKOD main app's Make Video tab to
+    hand over the cover image and the ticked Suno songs):
+        --image <path>            background/cover image
+        --audio <path>            audio track; repeat for multiple songs
+    """
+    import argparse
+    import multiprocessing
+    multiprocessing.freeze_support()
+
+    parser = argparse.ArgumentParser(description="TRAVKOD Video Visualizer")
+    parser.add_argument("--image", default="")
+    parser.add_argument("--audio", action="append", default=[])
+    args, _unknown = parser.parse_known_args(argv)
+
+    ctk.set_appearance_mode("light")
+    ctk.set_default_color_theme("blue")
+
+    # The app opens normally; VisualizerFrame checks the license itself and
+    # LOCKS the functions (with a 🔑 Activate button) until it is active.
+
+    if HAS_DND:
+        class App(ctk.CTk, TkinterDnD.DnDWrapper):
+            def __init__(self):
+                super().__init__()
+                self.TkdndVersion = TkinterDnD._require(self)
+    else:
+        App = ctk.CTk
+
+    app = App()
+    app.configure(fg_color="#f7f5f0")
+    app.title("TRAVKOD CODEs — Video Visualizer")
+    app.geometry("450x840")          # compact phone-style window
+    app.minsize(400, 660)
+    _set_app_icon(app)
+    frame = VisualizerFrame(app)
+    frame.pack(fill="both", expand=True)
+
+    # Prefill through the drop zones so the Files page shows the loaded names
+    # exactly as if the user had dropped the files themselves.
+    def _prefill():
+        try:
+            if args.image and os.path.exists(args.image):
+                frame.image_zone.set_file(args.image)
+            audio = [a for a in args.audio if a and os.path.exists(a)]
+            if audio:
+                frame.audio_zone.set_files(audio)
+        except Exception:
+            traceback.print_exc()
+
+    if args.image or args.audio:
+        app.after(400, _prefill)
+    app.mainloop()
+
+
+if __name__ == "__main__":
+    run_standalone()
