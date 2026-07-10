@@ -26,7 +26,12 @@ import traceback
 from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageFilter
+
+try:
+    from PIL import ImageGrab
+except ImportError:
+    ImageGrab = None
 
 try:
     from . import engine
@@ -321,6 +326,129 @@ class SubtitleEditor(ctk.CTkToplevel):
 # Main tab
 # --------------------------------------------------------------------------
 
+class RenderOverlay(ctk.CTkFrame):
+    """Full-window modern render popup: a snapshot of the app blurred behind
+    a glassy card with an animated circular progress ring, %, elapsed time
+    and ETA. Covers the whole frame like a 2050-style loader."""
+
+    def __init__(self, master, on_cancel):
+        super().__init__(master, fg_color="transparent")
+        self.on_cancel = on_cancel
+        self._angle = 0.0
+        self._frac = 0.0
+        self._t0 = time.monotonic()
+        self._spin_job = None
+        self._done = False
+
+        # dim + blurred backdrop from a snapshot of the frame
+        self.bg_label = ctk.CTkLabel(self, text="")
+        self.bg_label.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self._set_backdrop(master)
+
+        card = ctk.CTkFrame(self, corner_radius=28, width=280, height=300,
+                            fg_color=("#f6f5f1", "#12151b"),
+                            border_width=1, border_color=CARD_BORDER)
+        card.place(relx=0.5, rely=0.5, anchor="center")
+        card.pack_propagate(False)
+
+        self.ring = ctk.CTkCanvas(card, width=170, height=170,
+                                  highlightthickness=0,
+                                  bg=self._canvas_bg())
+        self.ring.pack(pady=(30, 6))
+        self.pct_lbl = ctk.CTkLabel(card, text="0%",
+                                    font=ctk.CTkFont(size=30, weight="bold"))
+        self.pct_lbl.place(in_=self.ring, relx=0.5, rely=0.5, anchor="center")
+        self.stage_lbl = ctk.CTkLabel(card, text="Preparing…",
+                                      font=ctk.CTkFont(size=13, weight="bold"))
+        self.stage_lbl.pack()
+        self.time_lbl = ctk.CTkLabel(card, text="00:00  •  ETA --:--",
+                                     font=ctk.CTkFont(size=12), text_color=MUTED)
+        self.time_lbl.pack(pady=(2, 8))
+        self.cancel_btn = ctk.CTkButton(card, text="✖ Cancel", width=130,
+                                        height=32, corner_radius=20,
+                                        fg_color=("#e5e3db", "#242a33"),
+                                        hover_color=("#d5d3cb", "#323a46"),
+                                        text_color=("#111827", "#e5e7eb"),
+                                        command=self._cancel)
+        self.cancel_btn.pack(pady=(0, 4))
+
+        self.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self._spin()
+
+    def _canvas_bg(self):
+        return "#12151b" if ctk.get_appearance_mode() == "Dark" else "#f6f5f1"
+
+    def _set_backdrop(self, master):
+        if ImageGrab is None:
+            self.bg_label.configure(fg_color=("#33333a", "#0a0c10"))
+            return
+        try:
+            master.update_idletasks()
+            w, h = max(1, master.winfo_width()), max(1, master.winfo_height())
+            x, y = master.winfo_rootx(), master.winfo_rooty()
+            img = ImageGrab.grab(bbox=(x, y, x + w, y + h))
+            img = img.filter(ImageFilter.GaussianBlur(14))
+            img = ImageEnhance.Brightness(img).enhance(0.55)
+            self._bg_img = ctk.CTkImage(light_image=img, dark_image=img,
+                                        size=(w, h))
+            self.bg_label.configure(image=self._bg_img)
+        except Exception:
+            self.bg_label.configure(fg_color=("#33333a", "#0a0c10"))
+
+    def _spin(self):
+        self._angle = (self._angle + 9) % 360
+        self._draw_ring()
+        self._update_time()
+        self._spin_job = self.after(33, self._spin)
+
+    def _draw_ring(self):
+        c = self.ring
+        c.delete("all")
+        size = 170
+        pad = 16
+        box = (pad, pad, size - pad, size - pad)
+        col1, col2 = "#8b5cf6", ACCENT
+        # track
+        c.create_oval(*box, outline="#3a3a46", width=10)
+        if self._frac > 0:
+            # determinate arc grows with progress
+            c.create_arc(*box, start=90, extent=-self._frac * 360,
+                         style="arc", outline=col2, width=10)
+        # spinner comet on top so motion is always visible (power/alive cue)
+        c.create_arc(*box, start=90 - self._angle, extent=-46,
+                     style="arc", outline=col1, width=10)
+
+    def _update_time(self):
+        el = time.monotonic() - self._t0
+        eta = ""
+        if self._frac > 0.02:
+            total = el / self._frac
+            rem = max(0, total - el)
+            eta = f"ETA {int(rem // 60):02d}:{int(rem % 60):02d}"
+        else:
+            eta = "ETA --:--"
+        self.time_lbl.configure(
+            text=f"{int(el // 60):02d}:{int(el % 60):02d}  •  {eta}")
+
+    def set_progress(self, done, total, stage="Rendering"):
+        self._frac = (done / total) if total else 0.0
+        self.pct_lbl.configure(text=f"{int(self._frac * 100)}%")
+        self.stage_lbl.configure(text=f"{stage}  {done}/{total}")
+
+    def set_stage(self, text):
+        self.stage_lbl.configure(text=text)
+
+    def _cancel(self):
+        self.cancel_btn.configure(text="Cancelling…", state="disabled")
+        self.on_cancel()
+
+    def close(self):
+        self._done = True
+        if self._spin_job:
+            self.after_cancel(self._spin_job)
+        self.destroy()
+
+
 class VisualizerFrame(ctk.CTkFrame):
     """The full Visualizer tab UI. Pack/grid it into any container."""
 
@@ -350,6 +478,7 @@ class VisualizerFrame(ctk.CTkFrame):
         self._pv_last_opts = None
         self._pv_last_t = None
         self._pv_busy = False
+        self._overlay = None
         self._pv_photo = None
         self._sound_ready = False
         self._seek_dragging = False
@@ -633,6 +762,12 @@ class VisualizerFrame(ctk.CTkFrame):
     def _on_album_style_change(self, val):
         self._pv_key = None
 
+    def _on_effect_change(self, val):
+        self._pv_key = None
+
+    def _on_effect_intensity(self, val):
+        self._pv_key = None
+
     def _update_tracklist_preview(self):
         self.tracklist_preview.configure(state="normal")
         self.tracklist_preview.delete("1.0", "end")
@@ -701,6 +836,27 @@ class VisualizerFrame(ctk.CTkFrame):
         self.title_size.set(1.0)
         self.title_size.grid(row=1, column=1, sticky="ew", pady=(8, 0))
 
+        # ---- Video Effects (moved here from More) ----
+        egrid = ctk.CTkFrame(page, fg_color="transparent")
+        egrid.pack(fill="x", padx=6, pady=(12, 0))
+        egrid.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(egrid, text="🌟 Video Effect",
+                     font=ctk.CTkFont(size=11, weight="bold")
+                     ).grid(row=0, column=0, sticky="w")
+        self.effect_menu = ctk.CTkOptionMenu(
+            egrid, values=engine.EFFECTS, height=30, corner_radius=20,
+            fg_color=ACCENT, button_color=ACCENT_HOVER,
+            button_hover_color=ACCENT_HOVER, command=self._on_effect_change)
+        self.effect_menu.set("None")
+        self.effect_menu.grid(row=1, column=0, sticky="ew")
+        self._label(page, "Effect intensity", pady=(6, 0))
+        self.effect_intensity = ctk.CTkSlider(page, from_=0, to=100,
+                                              progress_color=ACCENT,
+                                              button_color=ACCENT,
+                                              command=self._on_effect_intensity)
+        self.effect_intensity.set(50)
+        self.effect_intensity.pack(fill="x", padx=6, pady=(0, 4))
+
         # Album Tracklist Overlay tickbox
         self.use_album_tracklist = ctk.CTkCheckBox(
             page, text="Enable Album Tracklist Overlay",
@@ -719,6 +875,7 @@ class VisualizerFrame(ctk.CTkFrame):
             self.title_album_frame,
             values=["11. Playlist Cover (YouTube)", "12. Playlist Center Stack",
                     "13. Playlist Right Panel", "14. Playlist Glass Minimal",
+                    "15. Playlist Glass Right", "16. Playlist Glass Left",
                     "1. Kinetic Slide-In",
                     "2. Side Playlist Panel", "3. Live Wave Indicator",
                     "4. Modern Ticker Bar", "5. Neon Glow Label", "6. Cinematic Corner Stamp",
@@ -998,22 +1155,6 @@ class VisualizerFrame(ctk.CTkFrame):
         self.wm_corner_menu.pack(side="left", padx=(6, 0))
         self._grey_btn(wrow, "✕", self._remove_watermark, width=30,
                        height=30).pack(side="left", padx=(6, 0))
-
-        # ---- Video Effects ----
-        self._label(page, "🌟 Video Effects", pady=(14, 2))
-        erow = ctk.CTkFrame(page, fg_color="transparent")
-        erow.pack(fill="x", padx=6)
-        self.effect_menu = ctk.CTkOptionMenu(
-            erow, values=engine.EFFECTS, height=30, fg_color=ACCENT,
-            button_color=ACCENT_HOVER, button_hover_color=ACCENT_HOVER)
-        self.effect_menu.set("None")
-        self.effect_menu.pack(side="left", fill="x", expand=True)
-        self._label(page, "Effect intensity", pady=(6, 0))
-        self.effect_intensity = ctk.CTkSlider(page, from_=0, to=100,
-                                              progress_color=ACCENT,
-                                              button_color=ACCENT)
-        self.effect_intensity.set(50)
-        self.effect_intensity.pack(fill="x", padx=6, pady=(0, 10))
 
     # ---------------- file handlers ----------------
 
@@ -1570,10 +1711,18 @@ class VisualizerFrame(ctk.CTkFrame):
         self.progress.set(0)
         self._status("Rendering…")
 
+        # modern circular render popup (blurred backdrop + timer/ETA)
+        self._overlay = RenderOverlay(self, on_cancel=self._cancel.set)
+
         self._worker = threading.Thread(
             target=self._render_worker,
             args=(self.image_path, self.audio_paths, out_path, opts), daemon=True)
         self._worker.start()
+
+    def _close_overlay(self):
+        if getattr(self, "_overlay", None) is not None:
+            self._overlay.close()
+            self._overlay = None
 
     def _render_worker(self, image_path, audio_paths, out_path, opts):
         try:
@@ -1591,8 +1740,15 @@ class VisualizerFrame(ctk.CTkFrame):
     def _on_progress(self, done, total):
         self.progress.set(done / total)
         self._status(f"Rendering… frame {done}/{total} ({done * 100 // total}%)")
+        if getattr(self, "_overlay", None) is not None:
+            if done >= total:
+                self._overlay.set_progress(done, total, "Rendering frame")
+                self._overlay.set_stage("Finalizing video…")
+            else:
+                self._overlay.set_progress(done, total, "Rendering frame")
 
     def _on_done(self, out_path):
+        self._close_overlay()
         self._last_output = out_path
         self.progress.set(1)
         self._status(f"✅ Done!  Saved: {out_path}")
@@ -1601,12 +1757,14 @@ class VisualizerFrame(ctk.CTkFrame):
         self.open_btn.configure(state="normal")
 
     def _on_cancelled(self):
+        self._close_overlay()
         self.progress.set(0)
         self._status("Render cancelled.")
         self.render_btn.configure(state="normal")
         self.cancel_btn.configure(state="disabled")
 
     def _on_error(self, msg):
+        self._close_overlay()
         self.progress.set(0)
         self._status("❌ Render failed.")
         self.render_btn.configure(state="normal")

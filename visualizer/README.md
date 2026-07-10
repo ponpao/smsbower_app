@@ -17,10 +17,13 @@ music-visualizer **MP4** — ready for YouTube, TikTok or Reels.
 - 📋 **Tracklist Manager** (Files tab): every dropped song listed with its
   number — reorder (▲▼), remove (✕), ➕ Add Songs, 🗑 Clear All; the order
   is the play order in the video
-- ⚡ **Fast export**: multi-core CPU rendering for long videos (memory-safe —
-  the raw audio samples aren't copied to workers unless a waveform style
-  needs them) and optional GPU encoding (NVENC / AMF / QSV) that probes the
-  encoder and falls back to libx264 automatically
+- ⚡ **Fast, crash-proof export**: multi-core CPU rendering with a bounded
+  in-flight window so long videos never exhaust RAM (fixes "process pool
+  terminated abruptly"); if the worker pool ever dies the render continues
+  seamlessly on a single core instead of failing. Memory-safe (raw samples
+  aren't copied to workers unless a waveform style needs them) and optional
+  GPU encoding (NVENC / AMF / QSV) that probes the encoder and falls back to
+  libx264 automatically
 - 🎛 **Audio Studio** (real ffmpeg filters, applied on export): output
   volume, bass boost, reverb, and enhancer presets (loudness normalize,
   vocal presence, clarity, noise reduction)
@@ -29,9 +32,13 @@ music-visualizer **MP4** — ready for YouTube, TikTok or Reels.
 - 🎚 **Mix Master presets** (Studio tab): streaming-ready mastering chains —
   YouTube Loud, Warm Analog, Club Bass, Crystal Clear (compressor → EQ →
   loudness → limiter, exported at 256k audio)
-- 🌟 **Video Effects** (More tab): Snow Fall, Fireflies (slow floating
-  glow), Neon Dust, Rising Sparks, Bokeh Lights — deterministic particles
-  with an intensity slider, beat-reactive, ~0.3 ms/frame
+- 🌟 **Video Effects** (Title tab): Snow Fall, Fireflies (slow floating
+  glow), Neon Dust, Rising Sparks, Bokeh Lights, Rain, Confetti, Starfield,
+  Light Streaks, Music Notes — deterministic particles with an intensity
+  slider, beat-reactive, a few ms/frame
+- ⭕ **Circular render popup**: a full-window blurred backdrop with a glassy
+  card, animated progress ring, %, elapsed time and live ETA — no more thin
+  progress bar; cancel from the popup
 - 🖼 Watermark now has a ✕ remove button; Playlist Cover comes in 4
   layouts (Left / Center Stack / Right Panel / Glass Minimal)
 - ⚡ **Smooth UI**: preview frames render on a background thread, so

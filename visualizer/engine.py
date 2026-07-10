@@ -1358,7 +1358,8 @@ def get_active_track(tracks, current_time):
 # --------------------------------------------------------------------------
 
 EFFECTS = ["None", "Snow Fall", "Fireflies", "Neon Dust", "Rising Sparks",
-           "Bokeh Lights"]
+           "Bokeh Lights", "Rain", "Confetti", "Starfield", "Light Streaks",
+           "Music Notes"]
 
 
 def _prand(i, salt=0.0):
@@ -1442,6 +1443,81 @@ def draw_effect(frame, effect, t, intensity, c1, c2, bass=0.0):
                 draw.ellipse((px - rr, py - rr, px + rr, py + rr),
                              fill=color + (min(255, f),))
 
+    elif effect == "Rain":
+        length = 16 * unit
+        for i in range(int(n * 1.4)):
+            spd = 0.9 + 0.5 * _prand(i, 3.3)
+            y = ((_prand(i, 9.1) + t * spd) % 1.12) - 0.08
+            x = (_prand(i, 1.7) + 0.04) % 1.0
+            slant = 3 * unit
+            px, py = x * w, y * h
+            alpha = int(60 + 90 * _prand(i, 7.7))
+            draw.line((px, py, px + slant, py + length),
+                      fill=(200, 220, 255, alpha), width=max(1, int(unit)))
+
+    elif effect == "Confetti":
+        for i in range(n):
+            spd = 0.14 + 0.16 * _prand(i, 3.3)
+            y = ((_prand(i, 9.1) + t * spd) % 1.1) - 0.05
+            sway = 0.05 * math.sin(t * (1.5 + _prand(i, 2.2) * 2) + i)
+            x = (_prand(i, 1.7) + sway) % 1.0
+            s = (2.5 + 3.5 * _prand(i, 5.5)) * unit
+            palette = [c1, c2, (255, 90, 90), (255, 214, 90),
+                       (90, 220, 140), (110, 160, 255)]
+            color = palette[i % len(palette)]
+            px, py = x * w, y * h
+            spin = math.sin(t * 6 + i)          # fake 3-D flip by squashing
+            sw = max(1.0, abs(spin) * s)
+            draw.rectangle((px - sw, py - s, px + sw, py + s),
+                           fill=color + (225,))
+
+    elif effect == "Starfield":
+        for i in range(int(n * 1.6)):
+            x, y = _prand(i, 1.3), _prand(i, 2.7)
+            twinkle = 0.5 + 0.5 * math.sin(t * (1.5 + 2.5 * _prand(i, 6.1)) + i * 1.7)
+            r = (0.5 + 1.6 * _prand(i, 5.9)) * unit
+            px, py = x * w, y * h
+            a = int(40 + 200 * twinkle * (0.6 + 0.4 * bass))
+            draw.ellipse((px - r, py - r, px + r, py + r),
+                         fill=(255, 255, 255, a))
+            if _prand(i, 8.4) > 0.82:            # occasional colored star
+                draw.ellipse((px - r, py - r, px + r, py + r),
+                             fill=_lerp(c1, c2, _prand(i, 4.1)) + (a,))
+
+    elif effect == "Light Streaks":
+        for i in range(max(6, n // 4)):
+            spd = 0.25 + 0.4 * _prand(i, 3.3)
+            x = ((_prand(i, 9.1) + t * spd) % 1.3) - 0.15
+            y = _prand(i, 2.7)
+            ln = (40 + 120 * _prand(i, 5.5)) * unit
+            px, py = x * w, y * h
+            color = _lerp(c1, c2, _prand(i, 7.3))
+            a = int(30 + 70 * (0.5 + 0.5 * bass))
+            draw.line((px, py, px + ln, py), fill=color + (a,),
+                      width=max(1, int(1.5 * unit)))
+            draw.ellipse((px + ln - unit, py - unit, px + ln + unit, py + unit),
+                         fill=color + (min(255, a * 3),))
+
+    elif effect == "Music Notes":
+        glyphs = ["♪", "♫", "♩", "♬"]
+        # bucket sizes so we reuse a few cached TextEngines instead of
+        # building a HarfBuzz font per note per frame (was ~80 ms/frame)
+        base = max(12, int(16 * unit))
+        buckets = {s: TextEngine(s, "♪") for s in (base, int(base * 1.6),
+                                                   int(base * 2.2))}
+        bsizes = sorted(buckets)
+        for i in range(max(6, n // 3)):
+            spd = 0.09 + 0.14 * _prand(i, 3.3)
+            y = (_prand(i, 9.1) - t * spd) % 1.06
+            sway = 0.04 * math.sin(t * (1.0 + _prand(i, 2.2)) + i)
+            x = (_prand(i, 1.7) + sway) % 1.0
+            g = glyphs[i % len(glyphs)]
+            gte = buckets[bsizes[i % len(bsizes)]]
+            color = _lerp(c1, c2, _prand(i, 7.3))
+            fade = int(120 + 120 * (0.5 + 0.5 * math.sin(t + i)))
+            gte.draw(frame, (int(x * w), int(y * h)), g,
+                     color + (min(255, fade),))
+
 
 PLAYLIST_MAX_ROWS = 9
 
@@ -1451,6 +1527,8 @@ PLAYLIST_VARIANTS = {
     "12.": {"align": "center", "glass": False},
     "13.": {"align": "right", "glass": False},
     "14.": {"align": "center", "glass": True},
+    "15.": {"align": "right", "glass": True},
+    "16.": {"align": "left", "glass": True},
 }
 
 # static layers are expensive (blur glow) but only change when the active
@@ -2049,29 +2127,65 @@ def _worker_payload(assets, opts, an):
     return assets, wopts
 
 
-def _generate_frames(assets, opts, an, cancel_event, use_parallel):
-    """Yield (frame_index, rgb_bytes) in order, in-process or across CPUs."""
-    if use_parallel:
-        wassets, wopts = _worker_payload(assets, opts, an)
-        workers = min(8, max(1, os.cpu_count() or 2))
-        chunk = max(1, an.num_frames // (workers * 4))
-        executor = concurrent.futures.ProcessPoolExecutor(
-            max_workers=workers, initializer=_init_worker, initargs=(wassets, wopts))
-        try:
-            for i, res in executor.map(_draw_frame_worker, range(an.num_frames),
-                                       chunksize=chunk):
-                if isinstance(res, Exception):
-                    raise res
-                if cancel_event is not None and cancel_event.is_set():
-                    raise InterruptedError("cancelled")
-                yield i, res
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
-    else:
-        for i in range(an.num_frames):
+def _parallel_frames(assets, opts, an, cancel_event, start=0):
+    """Yield ordered frames from a process pool with a BOUNDED window of
+    in-flight futures. executor.map would submit every frame upfront and
+    buffer finished RGB frames faster than ffmpeg consumes them — on long
+    videos that exhausts RAM and Windows kills the workers ('process pool
+    terminated abruptly'). A sliding window keeps memory flat."""
+    from collections import deque
+    wassets, wopts = _worker_payload(assets, opts, an)
+    workers = max(1, min(12, (os.cpu_count() or 2) - 1))
+    window = workers * 3
+    executor = concurrent.futures.ProcessPoolExecutor(
+        max_workers=workers, initializer=_init_worker,
+        initargs=(wassets, wopts))
+    futures = deque()
+    next_i = start
+    total = an.num_frames
+    try:
+        while next_i < total and len(futures) < window:
+            futures.append(executor.submit(_draw_frame_worker, next_i))
+            next_i += 1
+        while futures:
             if cancel_event is not None and cancel_event.is_set():
                 raise InterruptedError("cancelled")
-            yield i, compose_frame(assets, i, opts).tobytes()
+            i, res = futures.popleft().result()
+            if isinstance(res, Exception):
+                raise res
+            if next_i < total:
+                futures.append(executor.submit(_draw_frame_worker, next_i))
+                next_i += 1
+            yield i, res
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
+def _generate_frames(assets, opts, an, cancel_event, use_parallel):
+    """Yield (frame_index, rgb_bytes) in order.
+
+    Multi-core when it pays off; if the worker pool ever dies (OOM, broken
+    child, frozen-build quirks) the render continues seamlessly on a single
+    core from the next frame instead of failing.
+    """
+    start = 0
+    if use_parallel:
+        try:
+            for i, res in _parallel_frames(assets, opts, an, cancel_event,
+                                           start):
+                start = i + 1
+                yield i, res
+            return
+        except (InterruptedError, GeneratorExit):
+            raise
+        except BaseException:
+            print("[visualizer] parallel rendering failed — continuing on a "
+                  "single core from frame", start, file=sys.stderr)
+            traceback.print_exc()
+    for i in range(start, an.num_frames):
+        if cancel_event is not None and cancel_event.is_set():
+            raise InterruptedError("cancelled")
+        yield i, compose_frame(assets, i, opts).tobytes()
 
 
 def _draw_frame_worker(i):

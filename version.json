@@ -1,12 +1,12 @@
 {
-  "version": "3.8.0",
+  "version": "3.9.0",
   "release_date": "2026-07-02",
-  "download_url": "https://github.com/ponpao/smsbower_app/releases/download/V3.8.0/TRAVKOD.CODEs.3.8.0.exe",
+  "download_url": "https://github.com/ponpao/smsbower_app/releases/download/V3.9.0/TRAVKOD.CODEs.3.9.0.exe",
   "changelog": [
-    "Visualizer: Video Effects ថ្មី — Snow Fall, Fireflies (អុជៗអណ្តែតយឺតៗ), Neon Dust, Rising Sparks, Bokeh Lights + Intensity slider",
-    "Visualizer: Playlist Cover 4 ទម្រង់ — Left / Center Stack / Right Panel / Glass Minimal",
-    "Visualizer: Mix Master 🎚 — YouTube Loud, Warm Analog, Club Bass, Crystal Clear (គុណភាពសំឡេង 256k)",
-    "Visualizer: ប៊ូតុង ✕ លុប Watermark",
-    "Visualizer: UI រលូនជាងមុន — Preview render នៅ background thread ចុចប៊ូតុងលែងទាក់ៗ"
+    "Visualizer: ជួសជុល Render error (process pool terminated) — bounded window + fallback single-core, Render មិនដែល fail ទៀតទេ",
+    "Visualizer: Circular Render Popup ថ្មី — background blur ពេញ, រង្វង់ progress, ភាគរយ, Timer និង ETA",
+    "Visualizer: ថែម Video Effect ថ្មី — Rain, Confetti, Starfield, Light Streaks, Music Notes (សរុប 10)",
+    "Visualizer: ផ្លាស់ Video Effects ទៅ Tab Title",
+    "Visualizer: ថែម Playlist style 15 & 16 (Glass Right / Glass Left)"
   ]
 }
