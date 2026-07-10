@@ -1,13 +1,12 @@
 {
-  "version": "4.0.0",
+  "version": "4.1.0",
   "release_date": "2026-07-10",
-  "download_url": "https://github.com/ponpao/smsbower_app/releases/download/V4.0.0/TRAVKOD.CODEs.4.0.0.exe",
+  "download_url": "https://github.com/ponpao/smsbower_app/releases/download/V4.1.0/TRAVKOD.CODEs.4.1.0.exe",
   "changelog": [
-    "License System ថ្មី — កម្មវិធីមិនដំណើរការបើគ្មានឡាយសិន (Activate ដោយកូដ)",
-    "ចាប់ PC ID ស្វ័យប្រវត្តិ, កូដចាក់សោរ PC ដំបូង, កំណត់ 1/7/30/365 ថ្ងៃ ឬ Custom",
-    "Revoke ឡាយសិនបានគ្រប់ពេល, ផុតកំណត់ម៉ត់ចត់ (ផុត ១០ កក្កដា → ១១ មិនដើរ), ការពារប្តូរម៉ោង",
-    "Google Sheet + Apps Script backend + HTML Generate button ក្នុង Sheet",
-    "Keyadmin (Flutter/Dart) — App គ្រប់គ្រងឡាយសិន Generate/Revoke, Universal APK",
-    "Design Logo App ថ្មី (Key + Play + Equalizer)"
+    "License: App បើកបានធម្មតា តែ Function ត្រូវ Lock រហូតដល់ Activate (មិនមែនបិទ App ទាំងស្រុង)",
+    "License: មាន 🔑 ប៊ូតុងលើ Header ចុចមក Popup Activate",
+    "License: បង្ហាញឈ្មោះ Owner (User) លើ App ក្រោយ Activate",
+    "License: តម្រឹមតាម Google Sheet ថ្មី (License_Key, Duration, Device_UID, Phone_Model, Status, Activation_Date, Expiry_Date, Owner)",
+    "Keyadmin: ថែមប្រអប់ Owner/User name ពេល Generate"
   ]
 }

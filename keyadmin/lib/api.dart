@@ -6,18 +6,17 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 class License {
-  final String code, machineId, uid, issued, activated, expiry, status, note;
+  final String code, machineId, owner, phoneModel, activated, expiry, status;
   final int planDays;
   License({
     required this.code,
     required this.planDays,
     required this.machineId,
-    required this.uid,
-    required this.issued,
+    required this.owner,
+    required this.phoneModel,
     required this.activated,
     required this.expiry,
     required this.status,
-    required this.note,
   });
 
   factory License.fromJson(Map<String, dynamic> j) => License(
@@ -26,12 +25,11 @@ class License {
             ? j['plan_days']
             : int.tryParse('${j['plan_days']}') ?? 0,
         machineId: '${j['machine_id'] ?? ''}',
-        uid: '${j['uid'] ?? ''}',
-        issued: '${j['issued'] ?? ''}',
+        owner: '${j['owner'] ?? ''}',
+        phoneModel: '${j['phone_model'] ?? ''}',
         activated: '${j['activated'] ?? ''}',
         expiry: '${j['expiry'] ?? ''}',
         status: '${j['status'] ?? ''}',
-        note: '${j['note'] ?? ''}',
       );
 
   int? get daysLeft {
@@ -79,15 +77,13 @@ class LicenseApi {
 
   Future<String> generate({
     required int days,
-    String uid = '',
-    String note = '',
+    String owner = '',
     String preMachine = '',
   }) async {
     final r = await _get({
       'action': 'generate',
       'plan_days': '$days',
-      'uid': uid,
-      'note': note,
+      'owner': owner,
       'machine_id': preMachine,
     });
     if (r['ok'] != true) throw Exception(r['reason'] ?? 'error');

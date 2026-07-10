@@ -128,8 +128,7 @@ class _HomePageState extends State<HomePage> {
     return _items
         .where((x) =>
             x.code.toLowerCase().contains(q) ||
-            x.uid.toLowerCase().contains(q) ||
-            x.note.toLowerCase().contains(q))
+            x.owner.toLowerCase().contains(q))
         .toList();
   }
 
@@ -200,7 +199,7 @@ class _HomePageState extends State<HomePage> {
     }[l.status] ?? Colors.grey;
     final dl = l.daysLeft;
     final sub = [
-      if (l.uid.isNotEmpty) l.uid,
+      if (l.owner.isNotEmpty) '👤 ${l.owner}',
       '${l.planDays}d',
       if (l.expiry.isNotEmpty) 'exp ${l.expiry}',
       if (dl != null && l.status == 'ACTIVE') '($dl left)',
@@ -264,8 +263,7 @@ class _HomePageState extends State<HomePage> {
       return;
     }
     int days = 30;
-    final uidCtl = TextEditingController();
-    final noteCtl = TextEditingController();
+    final ownerCtl = TextEditingController();
     final customCtl = TextEditingController();
     final presets = {'1 Day': 1, '7 Days': 7, '1 Month': 30, '3 Months': 90, '1 Year': 365};
 
@@ -303,13 +301,9 @@ class _HomePageState extends State<HomePage> {
               onChanged: (v) => setSheet(() => days = int.tryParse(v) ?? days),
             ),
             TextField(
-                controller: uidCtl,
+                controller: ownerCtl,
                 decoration: const InputDecoration(
-                    labelText: 'User label / UID (optional)')),
-            TextField(
-                controller: noteCtl,
-                decoration:
-                    const InputDecoration(labelText: 'Note (optional)')),
+                    labelText: 'Owner / User name (ឈ្មោះអ្នកប្រើ)')),
             const SizedBox(height: 14),
             SizedBox(
               width: double.infinity,
@@ -321,8 +315,7 @@ class _HomePageState extends State<HomePage> {
                   try {
                     final code = await _api!.generate(
                         days: days,
-                        uid: uidCtl.text.trim(),
-                        note: noteCtl.text.trim());
+                        owner: ownerCtl.text.trim());
                     if (ctx.mounted) Navigator.pop(ctx, code);
                   } catch (e) {
                     _toast('Failed: $e');

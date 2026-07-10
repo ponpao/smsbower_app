@@ -112,6 +112,22 @@ def machine_id():
     return "-".join(h[i:i + 5] for i in range(0, 20, 5))
 
 
+def device_model():
+    """Human-readable PC/device model for the Sheet's Phone_Model column."""
+    try:
+        if os.name == "nt":
+            out = subprocess.check_output(
+                ["wmic", "computersystem", "get", "manufacturer,model"],
+                text=True, stderr=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            lines = [l.strip() for l in out.splitlines() if l.strip()]
+            if len(lines) >= 2:
+                return " ".join(lines[1].split())[:60]
+    except Exception:
+        pass
+    return f"{platform.system()} {platform.release()} · {platform.node()}"[:60]
+
+
 # --------------------------------------------------------------------------
 # Signing
 # --------------------------------------------------------------------------
@@ -147,6 +163,7 @@ class LicenseState:
     status: str = ""
     online: bool = False
     days_left: int = 0
+    owner: str = ""            # user/owner name from the Sheet
 
 
 REASON_TEXT = {
@@ -182,7 +199,7 @@ def _write_cache(data):
 
 def _cache_body(data):
     return {k: data.get(k) for k in
-            ("code", "machine", "expiry", "status", "last_seen")}
+            ("code", "machine", "expiry", "status", "last_seen", "owner")}
 
 
 def _read_cache():
@@ -210,6 +227,7 @@ def clear_cache():
 def _post(action, code, machine):
     body = json.dumps({"action": action, "code": code,
                        "machine_id": machine,
+                       "device_model": device_model(),
                        "app": APP_NAME}).encode("utf-8")
     req = urllib.request.Request(
         WEB_APP_URL, data=body,
@@ -239,10 +257,11 @@ def _apply_server_reply(reply, code, machine):
         return LicenseState(False, "tampered",
                             "Signature mismatch — untrusted server reply.",
                             online=True)
+    owner = reply.get("owner", "")
     server_today = reply.get("server_date") or date.today().isoformat()
     _write_cache({"code": code, "machine": machine, "expiry": exp,
-                  "status": status, "last_seen": server_today})
-    return _decide(exp, status, server_today, online=True)
+                  "status": status, "last_seen": server_today, "owner": owner})
+    return _decide(exp, status, server_today, online=True, owner=owner)
 
 
 # --------------------------------------------------------------------------
@@ -253,12 +272,12 @@ def _parse_date(s):
     return datetime.strptime(s, "%Y-%m-%d").date()
 
 
-def _decide(expiry, status, today_iso, online):
+def _decide(expiry, status, today_iso, online, owner=""):
     """Allow only while today <= expiry date. One day past expiry -> blocked.
     e.g. expiry 2026-07-10 works on the 10th, blocked on the 11th."""
     if status and status.upper() == "REVOKED":
         return LicenseState(False, "revoked", _msg("revoked"), expiry=expiry,
-                            status=status, online=online)
+                            status=status, online=online, owner=owner)
     try:
         exp = _parse_date(expiry)
         today = _parse_date(today_iso)
@@ -267,10 +286,11 @@ def _decide(expiry, status, today_iso, online):
     if today > exp:
         return LicenseState(False, "expired",
                             _msg("expired", f"(ផុត {expiry})"),
-                            expiry=expiry, status=status, online=online)
+                            expiry=expiry, status=status, online=online,
+                            owner=owner)
     days_left = (exp - today).days
     return LicenseState(True, "", "", expiry=expiry, status=status or "ACTIVE",
-                        online=online, days_left=days_left)
+                        online=online, days_left=days_left, owner=owner)
 
 
 # --------------------------------------------------------------------------
@@ -335,7 +355,8 @@ def check_license():
     # advance last_seen so the clock can't be rolled back later
     effective = max(today, last_seen)
     st = _decide(cache.get("expiry", ""), status or "ACTIVE",
-                 effective.isoformat(), online=False)
+                 effective.isoformat(), online=False,
+                 owner=cache.get("owner", ""))
     if st.ok:
         c = dict(cache)
         c["last_seen"] = effective.isoformat()

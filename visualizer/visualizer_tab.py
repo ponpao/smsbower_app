@@ -491,14 +491,33 @@ class VisualizerFrame(ctk.CTkFrame):
         self.master_preset = "Off"
         self.vocal_isolated_path = None   # set by the Vocal Isolation tool
 
+        # license state
+        self._licensed = False
+        self._license_owner = ""
+        self._license_days = 0
+        self._license_expiry = ""
+
         self._build_ui()
         self.after(66, self._preview_tick)
+        self.after(150, self._init_license)
 
     # ------------- UI (compact phone-style: preview on top, tab pages) ----
 
     PAGE_NAMES = ("Files", "Style", "Title", "Subs", "Studio", "More")
 
     def _build_ui(self):
+        # header strip with the app name + license key button (top bar)
+        header = ctk.CTkFrame(self, fg_color="transparent", height=34)
+        header.pack(side="top", fill="x", padx=16, pady=(8, 0))
+        ctk.CTkLabel(header, text="🎬 Video Visualizer",
+                     font=ctk.CTkFont(size=14, weight="bold")).pack(side="left")
+        self.lic_btn = ctk.CTkButton(
+            header, text="🔒 Activate", width=110, height=26, corner_radius=20,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color=("#d1d5db", "#2b2b3a"), hover_color=("#b8bcc4", "#3a3a4d"),
+            text_color=("#111827", "#e5e7eb"), command=self._open_license)
+        self.lic_btn.pack(side="right")
+
         # bottom action bar packed first so it is never pushed off-screen
         bottom = ctk.CTkFrame(self, fg_color="transparent")
         bottom.pack(side="bottom", fill="x", padx=14, pady=(4, 10))
@@ -506,7 +525,7 @@ class VisualizerFrame(ctk.CTkFrame):
 
         top = ctk.CTkFrame(self, corner_radius=20, fg_color=CARD,
                            border_width=1, border_color=CARD_BORDER)
-        top.pack(side="top", fill="x", padx=14, pady=(10, 4))
+        top.pack(side="top", fill="x", padx=14, pady=(6, 4))
         self._build_preview(top)
 
         self.section_bar = ctk.CTkSegmentedButton(
@@ -534,6 +553,126 @@ class VisualizerFrame(ctk.CTkFrame):
         for page in self.pages.values():
             page.pack_forget()
         self.pages[name].pack(fill="both", expand=True, padx=8)
+
+    # ------------- license: open app but lock functions until active -------
+
+    def _load_license_module(self):
+        try:
+            try:
+                from license import license_client as lic
+            except ImportError:
+                sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+                from license import license_client as lic
+            return lic
+        except Exception:
+            return None
+
+    def _init_license(self):
+        """Check license in the background; lock the UI until it is active."""
+        lic = self._load_license_module()
+        if lic is None:
+            # license module missing: run unlocked unless a lock is enforced
+            if os.environ.get("TRAVKOD_LICENSE_REQUIRED") == "1":
+                self._apply_lock(False, "")
+            else:
+                self._apply_lock(True, "")
+                self.lic_btn.pack_forget()
+            return
+        self._set_lic_btn("checking")
+
+        def worker():
+            st = lic.check_license()
+            self.after(0, self._on_license_state, st)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_license_state(self, st):
+        owner = getattr(st, "owner", "") or ""
+        self._apply_lock(bool(st.ok), owner,
+                         days=getattr(st, "days_left", 0),
+                         expiry=getattr(st, "expiry", ""))
+
+    def _apply_lock(self, licensed, owner, days=0, expiry=""):
+        self._licensed = licensed
+        self._license_owner = owner
+        self._license_days = days
+        self._license_expiry = expiry
+        # gate the main action; the lock overlay blocks the rest
+        state = "normal" if licensed else "disabled"
+        try:
+            self.render_btn.configure(state=state)
+        except Exception:
+            pass
+        if licensed:
+            self._remove_lock_overlay()
+            self._set_lic_btn("ok")
+            who = f" · {owner}" if owner else ""
+            self._status(f"✅ License active{who} — សល់ {days} ថ្ងៃ")
+        else:
+            self._show_lock_overlay()
+            self._set_lic_btn("locked")
+
+    def _set_lic_btn(self, mode):
+        if not hasattr(self, "lic_btn"):
+            return
+        if mode == "ok":
+            label = "🔑 Licensed"
+            if self._license_days:
+                label = f"🔑 {self._license_days}d"
+            self.lic_btn.configure(text=label, fg_color=("#10b981", "#059669"),
+                                   hover_color=("#0d9668", "#047852"),
+                                   text_color="#ffffff")
+        elif mode == "checking":
+            self.lic_btn.configure(text="⏳ Checking…")
+        else:  # locked
+            self.lic_btn.configure(text="🔒 Activate",
+                                   fg_color=ACCENT, hover_color=ACCENT_HOVER,
+                                   text_color="#ffffff")
+
+    def _show_lock_overlay(self):
+        if getattr(self, "_lock_overlay", None) is not None:
+            return
+        ov = ctk.CTkFrame(self.page_container, corner_radius=16,
+                          fg_color=("#f0eeE8", "#0e1116"))
+        ov.place(relx=0, rely=0, relwidth=1, relheight=1)
+        inner = ctk.CTkFrame(ov, fg_color="transparent")
+        inner.place(relx=0.5, rely=0.42, anchor="center")
+        ctk.CTkLabel(inner, text="🔒", font=ctk.CTkFont(size=54)).pack()
+        ctk.CTkLabel(inner, text="មុខងារត្រូវបានចាក់សោ",
+                     font=ctk.CTkFont(size=17, weight="bold")).pack(pady=(6, 0))
+        ctk.CTkLabel(inner,
+                     text="សូមចុច 🔑 ខាងលើ ដើម្បីបញ្ចូលកូដ Activate\n"
+                          "(Functions locked — click the key to activate).",
+                     font=ctk.CTkFont(size=12), text_color=MUTED,
+                     justify="center").pack(pady=(2, 10))
+        ctk.CTkButton(inner, text="🔑 Activate Now", height=40, corner_radius=20,
+                      font=ctk.CTkFont(size=14, weight="bold"),
+                      fg_color=ACCENT, hover_color=ACCENT_HOVER,
+                      command=self._open_license).pack()
+        self._lock_overlay = ov
+
+    def _remove_lock_overlay(self):
+        ov = getattr(self, "_lock_overlay", None)
+        if ov is not None:
+            ov.destroy()
+            self._lock_overlay = None
+
+    def _open_license(self):
+        lic = self._load_license_module()
+        if lic is None:
+            messagebox.showinfo("License", "License module not found.")
+            return
+        try:
+            from license.license_gate import LicenseDialog
+        except ImportError:
+            sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+            from license.license_gate import LicenseDialog
+        st = lic.check_license()
+        dlg = LicenseDialog(self.winfo_toplevel(), st)
+        dlg.grab_set()
+        self.wait_window(dlg)
+        # re-check after the dialog closes (it may have activated)
+        self._init_license()
 
     # ---- top: live preview ----
 
@@ -1687,6 +1826,13 @@ class VisualizerFrame(ctk.CTkFrame):
     def _start_render(self):
         if self._worker and self._worker.is_alive():
             return
+        if not self._licensed:
+            messagebox.showwarning(
+                "License required",
+                "មុខងារត្រូវបានចាក់សោ។ សូមចុច 🔑 ដើម្បី Activate ជាមុនសិន។\n"
+                "(Locked — activate a license first.)")
+            self._open_license()
+            return
         if not self.image_path or not self.audio_paths:
             messagebox.showwarning("Missing files",
                                    "Please add both an image and at least one audio file first.")
@@ -1838,21 +1984,8 @@ def run_standalone(argv=None):
     ctk.set_appearance_mode("light")
     ctk.set_default_color_theme("blue")
 
-    # ---- License gate: the app must not run without an active license ----
-    try:
-        try:
-            from license.license_gate import require_license
-        except ImportError:
-            sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-            from license.license_gate import require_license
-        if not require_license():
-            return
-    except Exception:
-        # If the license module is missing/misconfigured, fail closed by
-        # default. Set TRAVKOD_LICENSE_OPTIONAL=1 to run without it (dev).
-        traceback.print_exc()
-        if os.environ.get("TRAVKOD_LICENSE_OPTIONAL") != "1":
-            return
+    # The app opens normally; VisualizerFrame checks the license itself and
+    # LOCKS the functions (with a 🔑 Activate button) until it is active.
 
     if HAS_DND:
         class App(ctk.CTk, TkinterDnD.DnDWrapper):

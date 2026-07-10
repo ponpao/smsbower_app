@@ -1,11 +1,16 @@
 # 🔑 TRAVKOD CODEs — License System (Setup Guide)
 
-A complete licensing system so the **Video Visualizer only runs with an
-active license**. You (admin) generate codes in a Google Sheet (or the
-Keyadmin phone app); each code locks to the **first PC** that activates it,
-runs for the number of days you choose (1 / 7 / 30 / 365 / custom), and you
-can **revoke** it any time. Expiry is **strict** — a 30-day code that ends
-on **10 July 2026** stops working on **11 July 2026**, no extra day.
+A complete licensing system for the **Video Visualizer**. The app **opens
+normally but its functions stay LOCKED** (a 🔒 overlay + a **🔑 Activate**
+button in the header) until a valid code is entered. You (admin) generate
+codes in a Google Sheet (or the Keyadmin phone app); each code locks to the
+**first PC** that activates it, runs for the days you choose
+(1 / 7 / 30 / 365 / custom), carries an **Owner name** that is shown in the
+app, and you can **revoke** it any time. Expiry is **strict** — a 30-day
+code ending **10 July 2026** stops on **11 July 2026**, no extra day.
+
+Sheet columns: `License_Key · Duration · Device_UID · Phone_Model · Status ·
+Activation_Date · Expiry_Date · Owner`.
 
 ```
 User's PC ──activate(code, PC-ID)──▶ Google Apps Script Web App ──▶ Google Sheet

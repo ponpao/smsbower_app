@@ -46,13 +46,10 @@
   </select>
   <input id="customDays" type="number" placeholder="Custom days" style="display:none;margin-top:6px;">
 
-  <label>User label / UID (optional)</label>
-  <input id="uid" placeholder="e.g. Sok Dara / 012 345 678">
+  <label>Owner / User name (ឈ្មោះអ្នកប្រើ)</label>
+  <input id="owner" placeholder="e.g. Sok Dara / 012 345 678">
 
-  <label>Note (optional)</label>
-  <input id="note" placeholder="paid, telegram, …">
-
-  <label>Pre-lock to PC ID (optional)</label>
+  <label>Pre-lock to Device UID (optional)</label>
   <input id="preMachine" placeholder="leave empty = lock on first use">
 
   <button onclick="gen()">⚡ Generate Code</button>
@@ -88,7 +85,7 @@
           refresh();
         } else setStatus('Error: ' + r.reason, 'err');
       }).withFailureHandler(e => setStatus('Error: ' + e.message, 'err'))
-        .uiGenerate(d, $('uid').value, $('note').value, $('preMachine').value);
+        .uiGenerate(d, $('owner').value, $('preMachine').value);
     }
 
     function revoke() {
@@ -103,9 +100,9 @@
     function refresh() {
       google.script.run.withSuccessHandler(r => {
         if (!r.ok) return;
-        let h = '<table><tr><th>Code</th><th>UID</th><th>Days</th><th>Expiry</th><th>Status</th></tr>';
+        let h = '<table><tr><th>Code</th><th>Owner</th><th>Days</th><th>Expiry</th><th>Status</th></tr>';
         r.licenses.slice().reverse().forEach(x => {
-          h += `<tr><td>${x.code}</td><td>${x.uid||''}</td><td>${x.plan_days}</td>`
+          h += `<tr><td>${x.code}</td><td>${x.owner||''}</td><td>${x.plan_days}</td>`
              + `<td>${x.expiry||'-'}</td><td><span class="pill ${x.status}">${x.status}</span></td></tr>`;
         });
         h += '</table>';
