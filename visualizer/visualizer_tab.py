@@ -1804,6 +1804,20 @@ def enable_dnd(root):
         return False
 
 
+def _set_app_icon(app):
+    """Set the window/taskbar icon from assets/logo.png (best-effort)."""
+    import tkinter
+    for rel in ("../assets/logo.png", "assets/logo.png"):
+        path = os.path.join(os.path.dirname(__file__), rel)
+        if os.path.exists(path):
+            try:
+                app._icon_img = tkinter.PhotoImage(file=path)
+                app.iconphoto(True, app._icon_img)
+                return
+            except Exception:
+                pass
+
+
 def run_standalone(argv=None):
     """Run the visualizer as its own window.
 
@@ -1824,6 +1838,22 @@ def run_standalone(argv=None):
     ctk.set_appearance_mode("light")
     ctk.set_default_color_theme("blue")
 
+    # ---- License gate: the app must not run without an active license ----
+    try:
+        try:
+            from license.license_gate import require_license
+        except ImportError:
+            sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+            from license.license_gate import require_license
+        if not require_license():
+            return
+    except Exception:
+        # If the license module is missing/misconfigured, fail closed by
+        # default. Set TRAVKOD_LICENSE_OPTIONAL=1 to run without it (dev).
+        traceback.print_exc()
+        if os.environ.get("TRAVKOD_LICENSE_OPTIONAL") != "1":
+            return
+
     if HAS_DND:
         class App(ctk.CTk, TkinterDnD.DnDWrapper):
             def __init__(self):
@@ -1837,6 +1867,7 @@ def run_standalone(argv=None):
     app.title("TRAVKOD CODEs — Video Visualizer")
     app.geometry("450x840")          # compact phone-style window
     app.minsize(400, 660)
+    _set_app_icon(app)
     frame = VisualizerFrame(app)
     frame.pack(fill="both", expand=True)
 

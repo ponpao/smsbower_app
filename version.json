@@ -1,12 +1,13 @@
 {
-  "version": "3.9.0",
-  "release_date": "2026-07-02",
-  "download_url": "https://github.com/ponpao/smsbower_app/releases/download/V3.9.0/TRAVKOD.CODEs.3.9.0.exe",
+  "version": "4.0.0",
+  "release_date": "2026-07-10",
+  "download_url": "https://github.com/ponpao/smsbower_app/releases/download/V4.0.0/TRAVKOD.CODEs.4.0.0.exe",
   "changelog": [
-    "Visualizer: ជួសជុល Render error (process pool terminated) — bounded window + fallback single-core, Render មិនដែល fail ទៀតទេ",
-    "Visualizer: Circular Render Popup ថ្មី — background blur ពេញ, រង្វង់ progress, ភាគរយ, Timer និង ETA",
-    "Visualizer: ថែម Video Effect ថ្មី — Rain, Confetti, Starfield, Light Streaks, Music Notes (សរុប 10)",
-    "Visualizer: ផ្លាស់ Video Effects ទៅ Tab Title",
-    "Visualizer: ថែម Playlist style 15 & 16 (Glass Right / Glass Left)"
+    "License System ថ្មី — កម្មវិធីមិនដំណើរការបើគ្មានឡាយសិន (Activate ដោយកូដ)",
+    "ចាប់ PC ID ស្វ័យប្រវត្តិ, កូដចាក់សោរ PC ដំបូង, កំណត់ 1/7/30/365 ថ្ងៃ ឬ Custom",
+    "Revoke ឡាយសិនបានគ្រប់ពេល, ផុតកំណត់ម៉ត់ចត់ (ផុត ១០ កក្កដា → ១១ មិនដើរ), ការពារប្តូរម៉ោង",
+    "Google Sheet + Apps Script backend + HTML Generate button ក្នុង Sheet",
+    "Keyadmin (Flutter/Dart) — App គ្រប់គ្រងឡាយសិន Generate/Revoke, Universal APK",
+    "Design Logo App ថ្មី (Key + Play + Equalizer)"
   ]
 }
