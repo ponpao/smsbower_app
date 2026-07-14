@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """Main window: tabs (All / Favorites / custom groups), profile table,
-search, bottom toolbar, context menus and group management.
+search, menu-driven actions, status bar and group management.
 
 Note: the v1.0.1 app had a sponsor button ("ឧបត្ថម្ភ") at the right end of
 the bottom toolbar. It was removed per the v1.1 brief — intentionally not
@@ -10,23 +10,29 @@ recreated in this rebuild.
 import os
 import subprocess
 import sys
+import time
 
 from PySide6.QtCore import QPoint, Qt, QTimer
 from PySide6.QtGui import QAction, QBrush, QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QFileDialog, QHBoxLayout, QHeaderView,
-    QInputDialog, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox,
-    QPushButton, QTabBar, QTableWidget, QTableWidgetItem, QVBoxLayout,
-    QWidget,
+    QAbstractItemView, QCheckBox, QFileDialog, QHeaderView, QInputDialog,
+    QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QTabBar,
+    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from . import i18n
+try:
+    import psutil
+except ImportError:  # CPU/RAM readout simply hides if psutil is missing
+    psutil = None
+
+from . import i18n, optimize
 from .chrome import GMAIL_SIGNUP_URL, ChromeLauncher, find_chrome
 from .dialogs import (
-    DELETE_CANCELLED, DELETE_GROUP_AND_PROFILES, DELETE_GROUP_ONLY,
-    GroupDialog, ProfileDialog, ask_delete_group, ask_yes_no,
+    DELETE_CANCELLED, DELETE_GROUP_AND_PROFILES, GroupDialog, LogsDialog,
+    ProfileDialog, ScanImportDialog, ask_delete_group, ask_yes_no,
 )
 from .i18n import tr
+from .logger import log
 from .storage import ProfileStore
 
 APP_VERSION = "1.1.0"
@@ -35,8 +41,9 @@ TAB_ALL = "__all__"
 TAB_FAVORITES = "__favorites__"
 FIXED_TABS = 2  # All + Favorites stay pinned at indexes 0 and 1
 
-COL_RUN, COL_FAV, COL_NAME, COL_KEY, COL_GMAIL, COL_PASSWORD = range(6)
+COL_STATUS, COL_FAV, COL_NAME, COL_KEY, COL_GMAIL, COL_PASSWORD, COL_NOTES = range(7)
 RUNNING_COLOR = QColor("#1a9c40")
+FAVORITE_COLOR = QColor("#f0a500")
 LAUNCH_CONFIRM_THRESHOLD = 5
 
 
@@ -45,6 +52,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.store = store
         self.launcher = ChromeLauncher()
+        self._started_at = time.monotonic()
         i18n.set_language(store.settings.get("language", "km"))
 
         self._build_ui()
@@ -58,14 +66,21 @@ class MainWindow(QMainWindow):
         self._run_timer.setInterval(2000)
         self._run_timer.timeout.connect(self._refresh_running_state)
         self._run_timer.start()
+        # status bar clock + CPU/RAM
+        self._status_timer = QTimer(self)
+        self._status_timer.setInterval(1000)
+        self._status_timer.timeout.connect(self._update_status_bar)
+        self._status_timer.start()
 
     # ---------- UI construction ----------
 
     def _build_ui(self):
-        self.resize(980, 620)
+        self.resize(1020, 640)
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
+        root.setContentsMargins(12, 10, 12, 6)
+        root.setSpacing(8)
 
         self.search_edit = QLineEdit()
         self.search_edit.textChanged.connect(self.refresh_table)
@@ -74,17 +89,22 @@ class MainWindow(QMainWindow):
         self.tab_bar = QTabBar()
         self.tab_bar.setMovable(True)  # drag-and-drop group reorder
         self.tab_bar.setUsesScrollButtons(True)
+        self.tab_bar.setDrawBase(False)
+        self.tab_bar.setExpanding(False)
         self.tab_bar.currentChanged.connect(lambda _i: self.refresh_table())
         self.tab_bar.tabMoved.connect(self._on_tab_moved)
         self.tab_bar.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tab_bar.customContextMenuRequested.connect(self._tab_context_menu)
         root.addWidget(self.tab_bar)
 
-        self.table = QTableWidget(0, 6)
+        self.table = QTableWidget(0, 7)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)  # ctrl+click multi-select
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setAlternatingRowColors(True)
+        self.table.setShowGrid(True)
         self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(34)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._table_context_menu)
         self.table.cellDoubleClicked.connect(self._on_double_click)
@@ -92,63 +112,92 @@ class MainWindow(QMainWindow):
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Interactive)
         header.setStretchLastSection(True)
-        self.table.setColumnWidth(COL_RUN, 36)
-        self.table.setColumnWidth(COL_FAV, 36)
+        self.table.setColumnWidth(COL_STATUS, 70)
+        self.table.setColumnWidth(COL_FAV, 90)
         self.table.setColumnWidth(COL_NAME, 220)
         self.table.setColumnWidth(COL_KEY, 110)
-        self.table.setColumnWidth(COL_GMAIL, 230)
+        self.table.setColumnWidth(COL_GMAIL, 220)
+        self.table.setColumnWidth(COL_PASSWORD, 110)
         root.addWidget(self.table, 1)
 
-        bar = QHBoxLayout()
-        self.btn_add_group = QPushButton()
-        self.btn_add_group.clicked.connect(self.create_group)
-        self.btn_add_profile = QPushButton()
-        self.btn_add_profile.clicked.connect(self.create_profile)
-        self.btn_import_export = QPushButton()
-        self.btn_import_export.clicked.connect(self._import_export_menu)
-        self.btn_close_all = QPushButton()
-        self.btn_close_all.clicked.connect(self.close_all_chrome)
+        # status bar: uptime + CPU/RAM on the left, Create Gmail on the right
+        self.uptime_label = QLabel()
+        self.uptime_label.setStyleSheet("color: #e08a00; font-weight: 700; padding: 0 8px;")
+        self.sys_label = QLabel()
+        self.sys_label.setStyleSheet("color: #2f8a3b; font-weight: 700; padding: 0 8px;")
         self.chk_create_gmail = QCheckBox()
         self.chk_create_gmail.setChecked(bool(self.store.settings.get("create_gmail")))
         self.chk_create_gmail.toggled.connect(self._on_create_gmail_toggled)
-        self.btn_exit = QPushButton()
-        self.btn_exit.clicked.connect(self.close)
-        for color, btn in (("#1f6fd6", self.btn_add_group), ("#1a9c40", self.btn_add_profile),
-                           ("#0f9d9d", self.btn_import_export), ("#d63a3a", self.btn_close_all)):
-            btn.setStyleSheet(f"QPushButton {{ background: {color}; color: white; "
-                              f"border-radius: 6px; padding: 7px 14px; font-weight: 600; }}")
-        self.btn_exit.setStyleSheet("QPushButton { background: #6c757d; color: white; "
-                                    "border-radius: 6px; padding: 7px 14px; font-weight: 600; }")
-        for w in (self.btn_add_group, self.btn_add_profile, self.btn_import_export, self.btn_close_all):
-            bar.addWidget(w)
-        bar.addStretch()
-        bar.addWidget(self.chk_create_gmail)
-        bar.addWidget(self.btn_exit)
-        # (sponsor button from v1.0.1 used to sit here — removed, see module docstring)
-        root.addLayout(bar)
+        status = self.statusBar()
+        status.addWidget(self.uptime_label)
+        status.addWidget(self.sys_label)
+        status.addPermanentWidget(self.chk_create_gmail)
+        self._update_status_bar()
 
         QShortcut(QKeySequence.Find, self, activated=lambda: self.search_edit.setFocus())
-        QShortcut(QKeySequence.New, self, activated=self.create_profile)
         QShortcut(QKeySequence.Delete, self.table, activated=self.delete_selected_profiles)
 
     def _build_menus(self):
         bar = self.menuBar()
+
+        # View: refresh + create + scan + import/export + close all + logs
         self.menu_view = bar.addMenu("")
         self.act_refresh = QAction(self)
         self.act_refresh.setShortcut(QKeySequence.Refresh)
         self.act_refresh.triggered.connect(self._full_refresh)
+        self.act_new_profile = QAction(self)
+        self.act_new_profile.setShortcut(QKeySequence.New)
+        self.act_new_profile.triggered.connect(self.create_profile)
+        self.act_add_group = QAction(self)
+        self.act_add_group.triggered.connect(self.create_group)
+        self.act_scan_view = QAction(self)
+        self.act_scan_view.triggered.connect(self.scan_chrome_profiles)
+        self.act_import = QAction(self)
+        self.act_import.triggered.connect(self._import)
+        self.act_export_all = QAction(self)
+        self.act_export_all.triggered.connect(self._export_all)
+        self.act_close_all_view = QAction(self)
+        self.act_close_all_view.triggered.connect(self.close_all_chrome)
+        self.act_logs = QAction(self)
+        self.act_logs.triggered.connect(lambda: LogsDialog(self).exec())
         self.menu_view.addAction(self.act_refresh)
+        self.menu_view.addSeparator()
+        self.menu_view.addActions([self.act_new_profile, self.act_add_group, self.act_scan_view])
+        self.menu_view.addSeparator()
+        self.menu_view.addActions([self.act_import, self.act_export_all])
+        self.menu_view.addSeparator()
+        self.menu_view.addActions([self.act_close_all_view, self.act_logs])
 
+        # Session: backups, restore, data folder, scan, close all
         self.menu_session = bar.addMenu("")
         self.act_backup = QAction(self)
         self.act_backup.triggered.connect(self._backup_now)
+        self.act_backup_data = QAction(self)
+        self.act_backup_data.triggered.connect(self._backup_data)
+        self.act_restore_data = QAction(self)
+        self.act_restore_data.triggered.connect(self._restore_data)
         self.act_open_data = QAction(self)
         self.act_open_data.triggered.connect(self._open_data_folder)
+        self.act_scan_session = QAction(self)
+        self.act_scan_session.triggered.connect(self.scan_chrome_profiles)
         self.act_close_all = QAction(self)
         self.act_close_all.triggered.connect(self.close_all_chrome)
-        self.menu_session.addActions([self.act_backup, self.act_open_data])
+        self.menu_session.addActions([self.act_backup, self.act_backup_data, self.act_restore_data,
+                                      self.act_open_data, self.act_scan_session])
         self.menu_session.addSeparator()
         self.menu_session.addAction(self.act_close_all)
+
+        # Optimize: clear caches for selected / all, with a dry-run toggle
+        self.menu_optimize = bar.addMenu("")
+        self.act_opt_selected = QAction(self)
+        self.act_opt_selected.triggered.connect(lambda: self.optimize_profiles(self._selected_profiles()))
+        self.act_opt_all = QAction(self)
+        self.act_opt_all.triggered.connect(lambda: self.optimize_profiles(list(self.store.profiles)))
+        self.act_opt_dry = QAction(self)
+        self.act_opt_dry.setCheckable(True)
+        self.menu_optimize.addActions([self.act_opt_selected, self.act_opt_all])
+        self.menu_optimize.addSeparator()
+        self.menu_optimize.addAction(self.act_opt_dry)
 
         self.menu_help = bar.addMenu("")
         self.act_about = QAction(self)
@@ -171,24 +220,34 @@ class MainWindow(QMainWindow):
         self.search_edit.setPlaceholderText(tr("search_placeholder"))
         self.menu_view.setTitle(tr("menu_view"))
         self.act_refresh.setText(tr("act_refresh"))
+        self.act_new_profile.setText(tr("btn_add_profile"))
+        self.act_add_group.setText(tr("btn_add_group"))
+        self.act_scan_view.setText(tr("act_scan"))
+        self.act_import.setText(tr("ie_import"))
+        self.act_export_all.setText(tr("ie_export_all"))
+        self.act_close_all_view.setText(tr("act_close_all"))
+        self.act_logs.setText(tr("act_logs"))
         self.menu_session.setTitle(tr("menu_session"))
         self.act_backup.setText(tr("act_backup_now"))
+        self.act_backup_data.setText(tr("act_backup_data"))
+        self.act_restore_data.setText(tr("act_restore_data"))
         self.act_open_data.setText(tr("act_open_data_folder"))
+        self.act_scan_session.setText(tr("act_scan"))
         self.act_close_all.setText(tr("act_close_all"))
+        self.menu_optimize.setTitle(tr("menu_optimize"))
+        self.act_opt_selected.setText(tr("act_opt_selected"))
+        self.act_opt_all.setText(tr("act_opt_all"))
+        self.act_opt_dry.setText(tr("act_opt_dry"))
         self.menu_help.setTitle(tr("menu_help"))
         self.act_about.setText(tr("act_about"))
         self.menu_language.setTitle(tr("menu_language"))
         for act in self.menu_language.actions():
             act.setChecked(act.data() == i18n.current_language())
         self.table.setHorizontalHeaderLabels([
-            tr("col_run"), "★", tr("col_name"), tr("col_key"), tr("col_gmail"), tr("col_password"),
+            tr("col_status"), tr("col_fav"), tr("col_name"), tr("col_key"),
+            tr("col_gmail"), tr("col_password"), tr("col_notes"),
         ])
-        self.btn_add_group.setText(tr("btn_add_group"))
-        self.btn_add_profile.setText(tr("btn_add_profile"))
-        self.btn_import_export.setText(tr("btn_import_export"))
-        self.btn_close_all.setText(tr("btn_close_all"))
         self.chk_create_gmail.setText(tr("chk_create_gmail"))
-        self.btn_exit.setText(tr("btn_exit"))
 
     def _set_language(self, code: str):
         i18n.set_language(code)
@@ -197,6 +256,20 @@ class MainWindow(QMainWindow):
         self.retranslate()
         self.rebuild_tabs()
         self.refresh_table()
+
+    # ---------- status bar ----------
+
+    def _update_status_bar(self):
+        elapsed = int(time.monotonic() - self._started_at)
+        h, rem = divmod(elapsed, 3600)
+        m, s = divmod(rem, 60)
+        self.uptime_label.setText(f"🕐 {h:02d}:{m:02d}:{s:02d}")
+        if psutil:
+            cpu = psutil.cpu_percent(interval=None)
+            ram = psutil.virtual_memory().percent
+            self.sys_label.setText(f"💻 CPU: {cpu:.0f}% | RAM: {ram:.0f}%")
+        else:
+            self.sys_label.setText("")
 
     # ---------- tabs ----------
 
@@ -260,7 +333,7 @@ class MainWindow(QMainWindow):
             if tab_id not in (TAB_ALL, TAB_FAVORITES) and p.get("group_id") != tab_id:
                 continue
             if query and query not in " ".join(
-                    [p.get("name", ""), p.get("key", ""), p.get("gmail", "")]).casefold():
+                    [p.get("name", ""), p.get("key", ""), p.get("gmail", ""), p.get("notes", "")]).casefold():
                 continue
             result.append(p)
         result.sort(key=lambda p: (not self.launcher.is_running(p["id"]), p.get("name", "").casefold()))
@@ -274,31 +347,33 @@ class MainWindow(QMainWindow):
             running = self.launcher.is_running(p["id"])
             group = self.store.group_by_id(p.get("group_id", ""))
 
-            run_item = QTableWidgetItem("1" if running else "0")
-            run_item.setTextAlignment(Qt.AlignCenter)
-            run_item.setData(Qt.UserRole, p["id"])
+            status_item = QTableWidgetItem("1" if running else "0")
+            status_item.setTextAlignment(Qt.AlignCenter)
+            status_item.setData(Qt.UserRole, p["id"])
 
-            fav_item = QTableWidgetItem("★" if p.get("favorite") else "☆")
+            fav_item = QTableWidgetItem(tr("col_fav") if p.get("favorite") else "")
             fav_item.setTextAlignment(Qt.AlignCenter)
-            fav_item.setForeground(QBrush(QColor("#f0a500" if p.get("favorite") else "#b0b0b0")))
+            fav_item.setForeground(QBrush(FAVORITE_COLOR))
 
             name_item = QTableWidgetItem(p.get("name", ""))
             if running:
                 name_item.setForeground(QBrush(RUNNING_COLOR))
-                run_item.setForeground(QBrush(RUNNING_COLOR))
+                status_item.setForeground(QBrush(RUNNING_COLOR))
             if group:
                 name_item.setToolTip(group["name"])
-                fav_item.setBackground(QBrush(QColor(group.get("color") or "#4f8ef7").lighter(170)))
+                name_item.setForeground(QBrush(QColor(group.get("color") or "#4f8ef7"))
+                                        if not running else QBrush(RUNNING_COLOR))
 
             gmail_item = QTableWidgetItem(p.get("gmail", ""))
-            gmail_item.setForeground(QBrush(QColor("#1f6fd6")))
+            gmail_item.setForeground(QBrush(QColor("#2f8a3b")))
 
-            self.table.setItem(row, COL_RUN, run_item)
+            self.table.setItem(row, COL_STATUS, status_item)
             self.table.setItem(row, COL_FAV, fav_item)
             self.table.setItem(row, COL_NAME, name_item)
             self.table.setItem(row, COL_KEY, QTableWidgetItem(p.get("key", "")))
             self.table.setItem(row, COL_GMAIL, gmail_item)
             self.table.setItem(row, COL_PASSWORD, QTableWidgetItem(p.get("password", "")))
+            self.table.setItem(row, COL_NOTES, QTableWidgetItem(p.get("notes", "")))
 
     def _refresh_running_state(self):
         # cheap periodic poll; repaint only when something changed
@@ -315,7 +390,7 @@ class MainWindow(QMainWindow):
         rows = sorted({i.row() for i in self.table.selectedIndexes()})
         out = []
         for row in rows:
-            item = self.table.item(row, COL_RUN)
+            item = self.table.item(row, COL_STATUS)
             if item:
                 p = self.store.profile_by_id(item.data(Qt.UserRole))
                 if p:
@@ -326,14 +401,14 @@ class MainWindow(QMainWindow):
 
     def _on_cell_clicked(self, row: int, col: int):
         if col == COL_FAV:
-            item = self.table.item(row, COL_RUN)
+            item = self.table.item(row, COL_STATUS)
             p = self.store.profile_by_id(item.data(Qt.UserRole)) if item else None
             if p:
                 self.store.update_profile(p["id"], favorite=not p.get("favorite"))
                 self.refresh_table()
 
     def _on_double_click(self, row: int, _col: int):
-        item = self.table.item(row, COL_RUN)
+        item = self.table.item(row, COL_STATUS)
         p = self.store.profile_by_id(item.data(Qt.UserRole)) if item else None
         if p:
             self.launch_profile(p)
@@ -353,9 +428,16 @@ class MainWindow(QMainWindow):
             url = profile.get("launch_url", "")
             if self.chk_create_gmail.isChecked():
                 url = GMAIL_SIGNUP_URL
-        started = self.launcher.launch(profile["id"], chrome, self.store.user_data_dir(profile), url)
+        if self.store.is_system_profile(profile):
+            # existing Chrome profile on this PC: reuse the real User Data dir
+            started = self.launcher.launch(
+                profile["id"], chrome, user_data_dir=profile["chrome_base"], url=url,
+                profile_directory=profile["chrome_profile_dir"])
+        else:
+            started = self.launcher.launch(
+                profile["id"], chrome, user_data_dir=self.store.user_data_dir(profile), url=url)
         if started:
-            import time
+            log().info("launched profile %s (%s)", profile.get("name"), profile.get("key"))
             self.store.update_profile(profile["id"], last_used=time.strftime("%Y-%m-%d %H:%M:%S"))
             self.refresh_table()
         return started
@@ -377,6 +459,7 @@ class MainWindow(QMainWindow):
                 dlg.group_combo.setCurrentIndex(idx)
         if dlg.exec():
             self.store.add_profile(**dlg.result_values())
+            log().info("created profile")
             self._full_refresh()
 
     def edit_profile(self, profile: dict):
@@ -409,15 +492,55 @@ class MainWindow(QMainWindow):
             text = tr("msg_confirm_delete_profiles", n=len(profiles))
         if not ask_yes_no(self, tr("app_title"), text):
             return
-        # disk data is only removed after its own explicit confirmation
-        wipe_disk = ask_yes_no(self, tr("app_title"),
-                               tr("msg_delete_disk_folders", n=len(profiles)))
+        # disk data is only removed after its own explicit confirmation, and
+        # only for app-owned isolated profiles (never the real Chrome data)
+        isolated = [p for p in profiles if not self.store.is_system_profile(p)]
+        wipe_disk = False
+        if isolated:
+            wipe_disk = ask_yes_no(self, tr("app_title"),
+                                   tr("msg_delete_disk_folders", n=len(isolated)))
         for p in profiles:
             self.launcher.close(p["id"])
             if wipe_disk:
                 self.store.delete_profile_disk_data(p)
         self.store.delete_profiles([p["id"] for p in profiles])
+        log().info("deleted %d profile(s)", len(profiles))
         self._full_refresh()
+
+    # ---------- scan & import / optimize ----------
+
+    def scan_chrome_profiles(self):
+        dlg = ScanImportDialog(self.store, self)
+        if dlg.exec() and dlg.imported:
+            log().info("imported %d system Chrome profile(s)", dlg.imported)
+            self._full_refresh()
+            QMessageBox.information(self, tr("scan_title"), tr("scan_imported", n=dlg.imported))
+
+    def optimize_profiles(self, profiles: list):
+        if not profiles:
+            return
+        dry_run = self.act_opt_dry.isChecked()
+        running = [p for p in profiles if self.launcher.is_running(p["id"])]
+        targets = [p for p in profiles if not self.launcher.is_running(p["id"])]
+        if not dry_run and targets:
+            if not ask_yes_no(self, tr("menu_optimize"), tr("opt_confirm", n=len(targets))):
+                return
+        freed = 0
+        seen_roots = set()
+        for p in targets:
+            freed += optimize.optimize_profile(self.store.profile_content_dir(p), dry_run)
+            if not self.store.is_system_profile(p):
+                root = self.store.user_data_dir(p)
+                if root not in seen_roots:
+                    seen_roots.add(root)
+                    freed += optimize.optimize_user_data_root(root, dry_run)
+        mb = f"{freed / (1024 * 1024):.1f}"
+        msg = tr("opt_dry_result" if dry_run else "opt_result", mb=mb, n=len(targets))
+        if running:
+            msg += "\n" + tr("opt_skipped_running", n=len(running))
+        log().info("optimize (%s): %s MB across %d profile(s)",
+                   "dry-run" if dry_run else "real", mb, len(targets))
+        QMessageBox.information(self, tr("menu_optimize"), msg)
 
     # ---------- context menus ----------
 
@@ -440,11 +563,13 @@ class MainWindow(QMainWindow):
             menu.addAction(tr("ctx_export_profile"), lambda: self.export_profile(p))
             menu.addAction(tr("ctx_create_gmail"), lambda: self.launch_profile(p, url=GMAIL_SIGNUP_URL))
             menu.addSeparator()
+            menu.addAction(tr("act_opt_selected"), lambda: self.optimize_profiles([p]))
             move_menu = menu.addMenu(tr("ctx_move_to_group"))
             delete_text = tr("ctx_delete_profile")
         else:
             menu.addAction(tr("ctx_launch"), lambda: self.launch_profiles(profiles))
             menu.addSeparator()
+            menu.addAction(tr("act_opt_selected"), lambda: self.optimize_profiles(profiles))
             move_menu = menu.addMenu(tr("ctx_move_selected_to_group", n=len(profiles)))
             delete_text = tr("ctx_delete_profiles", n=len(profiles))
 
@@ -522,6 +647,7 @@ class MainWindow(QMainWindow):
                 self.launcher.close(p["id"])
                 if wipe_disk:
                     self.store.delete_profile_disk_data(p)
+        log().info("deleted group %s (cascade=%s)", group.get("name"), cascade)
         self._full_refresh()
 
     def export_group(self, group: dict, members: list):
@@ -532,13 +658,7 @@ class MainWindow(QMainWindow):
             self.store.export_profiles(members, path)
             QMessageBox.information(self, tr("app_title"), tr("export_done", path=path))
 
-    # ---------- toolbar / menu actions ----------
-
-    def _import_export_menu(self):
-        menu = QMenu(self)
-        menu.addAction(tr("ie_export_all"), self._export_all)
-        menu.addAction(tr("ie_import"), self._import)
-        menu.exec(self.btn_import_export.mapToGlobal(QPoint(0, -10)))
+    # ---------- import / export / backups ----------
 
     def _export_all(self):
         path, _ = QFileDialog.getSaveFileName(self, tr("ie_export_all"), "profiles_export.json",
@@ -556,17 +676,45 @@ class MainWindow(QMainWindow):
         except (ValueError, KeyError, OSError) as e:
             QMessageBox.warning(self, tr("app_title"), tr("import_failed", err=str(e)))
             return
+        log().info("imported %d profile(s) from %s", n, path)
         self._full_refresh()
         QMessageBox.information(self, tr("app_title"), tr("import_done", n=n))
-
-    def close_all_chrome(self):
-        self.launcher.close_all()
-        self.refresh_table()
 
     def _backup_now(self):
         self.store.save()
         QMessageBox.information(self, tr("app_title"),
-                                tr("export_done", path=self.store.backups_dir))
+                                tr("backup_data_done", path=self.store.backups_dir))
+
+    def _backup_data(self):
+        default = time.strftime("profile_data_%Y%m%d_%H%M%S.zip")
+        path, _ = QFileDialog.getSaveFileName(self, tr("act_backup_data"), default, "ZIP (*.zip)")
+        if not path:
+            return
+        self.store.backup_data_zip(path)
+        log().info("data backup written to %s", path)
+        QMessageBox.information(self, tr("app_title"), tr("backup_data_done", path=path))
+
+    def _restore_data(self):
+        path, _ = QFileDialog.getOpenFileName(self, tr("act_restore_data"), "", "ZIP (*.zip)")
+        if not path:
+            return
+        if not ask_yes_no(self, tr("act_restore_data"), tr("restore_confirm", path=path)):
+            return
+        self.close_all_chrome()
+        try:
+            self.store.restore_data_zip(path)
+        except (ValueError, OSError) as e:
+            QMessageBox.warning(self, tr("app_title"), tr("import_failed", err=str(e)))
+            return
+        log().info("data restored from %s", path)
+        self._full_refresh()
+        QMessageBox.information(self, tr("app_title"), tr("restore_done"))
+
+    # ---------- misc ----------
+
+    def close_all_chrome(self):
+        self.launcher.close_all()
+        self.refresh_table()
 
     def _open_data_folder(self):
         path = self.store.data_dir

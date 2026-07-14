@@ -2,10 +2,17 @@
 """Launching and tracking system Chrome processes (one per profile).
 
 The app does not bundle Chromium — it finds the system-installed Chrome.
+Profiles come in two flavors:
+  * isolated  — the app's own --user-data-dir folder under data/chrome_profiles
+  * system    — an existing profile inside the real Chrome "User Data" folder
+                (imported via Scan & Import), launched with
+                --user-data-dir=<User Data> --profile-directory=<Profile N>
+
 Tracking launched PIDs gives us duplicate-launch prevention, the live
 running indicator, and per-group / global "close all".
 """
 
+import json
 import os
 import shutil
 import subprocess
@@ -40,6 +47,59 @@ def find_chrome(configured_path: str = "") -> str:
     return ""
 
 
+def default_user_data_path() -> str:
+    """The system Chrome 'User Data' directory for the current OS."""
+    if sys.platform.startswith("win"):
+        return os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\User Data")
+    if sys.platform == "darwin":
+        return os.path.expanduser("~/Library/Application Support/Google/Chrome")
+    return os.path.expanduser("~/.config/google-chrome")
+
+
+def scan_system_profiles(base_path: str) -> list:
+    """List existing Chrome profiles inside a 'User Data' folder.
+
+    Returns [{"dir": "Profile 1", "name": "Person 1", "gmail": "x@gmail.com"}].
+    Reads Local State's profile.info_cache first (has display name + account),
+    falling back to each profile folder's Preferences file.
+    """
+    results = []
+    if not os.path.isdir(base_path):
+        return results
+    info_cache = {}
+    local_state = os.path.join(base_path, "Local State")
+    if os.path.isfile(local_state):
+        try:
+            with open(local_state, "r", encoding="utf-8") as f:
+                info_cache = json.load(f).get("profile", {}).get("info_cache", {}) or {}
+        except (json.JSONDecodeError, OSError):
+            info_cache = {}
+
+    def looks_like_profile(name: str) -> bool:
+        return name == "Default" or name.startswith("Profile ")
+
+    dirs = sorted(d for d in os.listdir(base_path)
+                  if looks_like_profile(d) and os.path.isdir(os.path.join(base_path, d)))
+    for d in dirs:
+        info = info_cache.get(d, {})
+        name = info.get("name") or info.get("gaia_name") or d
+        gmail = info.get("user_name", "")
+        if not gmail or not info:
+            prefs_path = os.path.join(base_path, d, "Preferences")
+            if os.path.isfile(prefs_path):
+                try:
+                    with open(prefs_path, "r", encoding="utf-8") as f:
+                        prefs = json.load(f)
+                    name = prefs.get("profile", {}).get("name") or name
+                    accounts = prefs.get("account_info") or []
+                    if accounts and not gmail:
+                        gmail = accounts[0].get("email", "")
+                except (json.JSONDecodeError, OSError):
+                    pass
+        results.append({"dir": d, "name": name, "gmail": gmail})
+    return results
+
+
 class ChromeLauncher:
     def __init__(self):
         self._procs = {}  # profile_id -> subprocess.Popen
@@ -56,12 +116,20 @@ class ChromeLauncher:
     def running_ids(self) -> set:
         return {pid for pid in list(self._procs) if self.is_running(pid)}
 
-    def launch(self, profile_id: str, chrome_path: str, user_data_dir: str, url: str = "") -> bool:
+    def launch(self, profile_id: str, chrome_path: str, user_data_dir: str = "",
+               url: str = "", profile_directory: str = "") -> bool:
         """Start Chrome for a profile. Returns False if it is already running."""
         if self.is_running(profile_id):
             return False
-        os.makedirs(user_data_dir, exist_ok=True)
-        cmd = [chrome_path, f"--user-data-dir={user_data_dir}", "--no-first-run", "--no-default-browser-check"]
+        cmd = [chrome_path]
+        if user_data_dir:
+            if not profile_directory:  # only create folders the app owns
+                os.makedirs(user_data_dir, exist_ok=True)
+            cmd.append(f"--user-data-dir={user_data_dir}")
+        if profile_directory:
+            cmd.append(f"--profile-directory={profile_directory}")
+        else:
+            cmd += ["--no-first-run", "--no-default-browser-check"]
         if url:
             cmd.append(url)
         creationflags = 0

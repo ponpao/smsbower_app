@@ -87,9 +87,12 @@ class ProfileStore:
                 "key": p.get("key", ""),
                 "gmail": p.get("gmail", ""),
                 "password": p.get("password", ""),
+                "notes": p.get("notes", ""),
                 "favorite": bool(p.get("favorite")),
                 "group_id": by_name.get(p.get("group", ""), ""),
                 "launch_url": p.get("launch_url", ""),
+                "chrome_base": p.get("chrome_base", ""),
+                "chrome_profile_dir": p.get("chrome_profile_dir", ""),
                 "created_at": p.get("created_at", _now()),
                 "last_used": p.get("last_used", ""),
             })
@@ -230,9 +233,14 @@ class ProfileStore:
             "key": fields.get("key") or self.next_profile_key(),
             "gmail": fields.get("gmail", ""),
             "password": fields.get("password", ""),
+            "notes": fields.get("notes", ""),
             "favorite": bool(fields.get("favorite")),
             "group_id": fields.get("group_id", ""),
             "launch_url": fields.get("launch_url", ""),
+            # set for profiles imported from the system Chrome "User Data" dir;
+            # such profiles launch with the user's existing Chrome data
+            "chrome_base": fields.get("chrome_base", ""),
+            "chrome_profile_dir": fields.get("chrome_profile_dir", ""),
             "created_at": _now(),
             "last_used": "",
         }
@@ -244,7 +252,8 @@ class ProfileStore:
         p = self.profile_by_id(pid)
         if not p:
             return
-        for k in ("name", "key", "gmail", "password", "favorite", "group_id", "launch_url", "last_used"):
+        for k in ("name", "key", "gmail", "password", "notes", "favorite", "group_id",
+                  "launch_url", "chrome_base", "chrome_profile_dir", "last_used"):
             if k in fields:
                 p[k] = fields[k]
         self.save()
@@ -265,11 +274,61 @@ class ProfileStore:
         safe = "".join(c if c.isalnum() or c in " _-" else "_" for c in profile.get("key") or profile["id"])
         return os.path.join(self.chrome_dir, safe.strip() or profile["id"])
 
+    def is_system_profile(self, profile: dict) -> bool:
+        return bool(profile.get("chrome_base") and profile.get("chrome_profile_dir"))
+
+    def profile_content_dir(self, profile: dict) -> str:
+        """Folder holding the profile's cache dirs (for the optimizer)."""
+        if self.is_system_profile(profile):
+            return os.path.join(profile["chrome_base"], profile["chrome_profile_dir"])
+        return os.path.join(self.user_data_dir(profile), "Default")
+
     def delete_profile_disk_data(self, profile: dict) -> None:
-        """Only ever called after an explicit user confirmation dialog."""
+        """Only ever called after an explicit user confirmation dialog.
+
+        System-Chrome profiles are never wiped — their folders belong to the
+        user's real Chrome installation; we only remove our own record.
+        """
+        if self.is_system_profile(profile):
+            return
         path = self.user_data_dir(profile)
         if os.path.isdir(path):
             shutil.rmtree(path, ignore_errors=True)
+
+    # ---------- data backup / restore (zip of the whole data folder) ----------
+
+    def backup_data_zip(self, dest_path: str) -> None:
+        import zipfile
+        skip_roots = (os.path.abspath(self.backups_dir),
+                      os.path.abspath(os.path.join(self.data_dir, "logs")))
+        with zipfile.ZipFile(dest_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for root, dirs, files in os.walk(self.data_dir):
+                if os.path.abspath(root).startswith(skip_roots):
+                    dirs[:] = []
+                    continue
+                for name in files:
+                    full = os.path.join(root, name)
+                    if os.path.abspath(full) == os.path.abspath(dest_path):
+                        continue
+                    zf.write(full, os.path.relpath(full, self.data_dir))
+
+    def restore_data_zip(self, src_path: str) -> None:
+        """Extract a data backup over the data folder.
+
+        A safety backup of the current profiles.json is taken first; entries
+        that would escape the data dir are rejected (zip-slip protection).
+        """
+        import zipfile
+        self._backup(tag="pre-restore")
+        base = os.path.abspath(self.data_dir)
+        with zipfile.ZipFile(src_path, "r") as zf:
+            for member in zf.namelist():
+                target = os.path.abspath(os.path.join(base, member))
+                if not target.startswith(base + os.sep) and target != base:
+                    raise ValueError(f"unsafe path in backup: {member}")
+            zf.extractall(base)
+        self.data = self._load_profiles()
+        self.settings = self._load_settings()
 
     # ---------- import / export ----------
 
@@ -278,12 +337,12 @@ class ProfileStore:
             import csv
             with open(path, "w", newline="", encoding="utf-8-sig") as f:
                 writer = csv.writer(f)
-                writer.writerow(["name", "key", "gmail", "password", "group", "favorite", "launch_url"])
+                writer.writerow(["name", "key", "gmail", "password", "notes", "group", "favorite", "launch_url"])
                 for p in profiles:
                     g = self.group_by_id(p.get("group_id", ""))
                     writer.writerow([p["name"], p["key"], p["gmail"], p["password"],
-                                     g["name"] if g else "", "1" if p.get("favorite") else "0",
-                                     p.get("launch_url", "")])
+                                     p.get("notes", ""), g["name"] if g else "",
+                                     "1" if p.get("favorite") else "0", p.get("launch_url", "")])
         else:
             payload = {"schema_version": SCHEMA_VERSION,
                        "groups": [g for g in self.groups],
@@ -312,7 +371,10 @@ class ProfileStore:
                 key = self.next_profile_key()
             existing_keys.add(key)
             self.add_profile(name=p.get("name", ""), key=key, gmail=p.get("gmail", ""),
-                             password=p.get("password", ""), favorite=p.get("favorite"),
-                             group_id=gid, launch_url=p.get("launch_url", ""))
+                             password=p.get("password", ""), notes=p.get("notes", ""),
+                             favorite=p.get("favorite"), group_id=gid,
+                             launch_url=p.get("launch_url", ""),
+                             chrome_base=p.get("chrome_base", ""),
+                             chrome_profile_dir=p.get("chrome_profile_dir", ""))
             count += 1
         return count

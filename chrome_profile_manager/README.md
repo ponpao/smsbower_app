@@ -35,6 +35,25 @@ pyinstaller --noconsole --onefile --name ChromeProfileManager main.py
   Create Gmail checkbox, Exit — the ឧបត្ថម្ភ (sponsor) button was removed per the brief
 - 7 languages: ភាសាខ្មែរ / English / Tiếng Việt / हिन्दी / 한국어 / 日本語 / 简体中文
 
+**Modern UI (v1.1)**
+
+- Light-green modern theme (pill tabs, rounded search bar, styled table)
+- Menu-driven layout: **View** (refresh, new profile, add group, scan,
+  import/export, close all, logs), **Session** (backups, restore, data
+  folder), **Optimize** (cache cleaner with dry-run preview)
+- Status bar: session uptime + live CPU/RAM usage, Create Gmail toggle
+- **Scan & Import Chrome Profiles**: reads the system Chrome `User Data`
+  folder (names + Gmail from Local State/Preferences) and imports existing
+  profiles — they keep launching with your existing Chrome data via
+  `--profile-directory`, nothing is copied
+- **Optimize**: clears disposable cache folders (Cache, Code Cache, GPUCache,
+  Service Worker cache…) per profile or for all; logins/bookmarks/history are
+  kept; "Preview only (dry run)" shows what would be freed
+- **Backup / Restore Profile Data**: zip the whole data folder and restore it
+  later (with a safety backup first)
+- Logs viewer (View → Logs, stored in `data/logs/app.log`)
+- Notes column (searchable) on every profile
+
 **New in v1.1**
 
 - Group management (right-click a group tab): rename, edit color, delete —
