@@ -224,6 +224,57 @@ def analyze(audio_path, fps):
 _KHMER_RE = re.compile(r"[ក-៿᧠-᧿]")
 _font_cache = {}
 
+# Scripts written without spaces between words. text.split() returns a single
+# token for these, so the old wrap_text() could never break the line and the
+# caption ran off both edges of the frame. See split_clusters().
+_SPACELESS_RE = re.compile(
+    r"[ក-៿"      # Khmer
+    r"฀-๿"       # Thai
+    r"຀-໿"       # Lao
+    r"က-႟"       # Myanmar
+    r"一-鿿"       # CJK ideographs
+    r"぀-ヿ]"      # Kana
+)
+
+# Scripts that are wrong without a real shaper (HarfBuzz). Khmer coeng stacks,
+# Thai 4-level marks, Devanagari conjuncts + matra reordering, Tamil ligatures.
+_COMPLEX_RE = re.compile(
+    r"[ក-៿"      # Khmer
+    r"฀-๿"       # Thai
+    r"຀-໿"       # Lao
+    r"ऀ-ॿ"       # Devanagari
+    r"஀-௿"       # Tamil
+    r"က-႟]"      # Myanmar
+)
+
+
+def text_is_spaceless(text):
+    return bool(_SPACELESS_RE.search(text or ""))
+
+
+def text_needs_shaping(text):
+    """True when `text` contains any script that requires HarfBuzz shaping."""
+    return bool(_COMPLEX_RE.search(text or ""))
+
+
+# (HarfBuzz script tag, BCP-47 language) per complex script.
+_SCRIPT_TAGS = (
+    (re.compile(r"[ក-៿]"), ("Khmr", "km")),
+    (re.compile(r"[฀-๿]"), ("Thai", "th")),
+    (re.compile(r"[຀-໿]"), ("Laoo", "lo")),
+    (re.compile(r"[ऀ-ॿ]"), ("Deva", "hi")),
+    (re.compile(r"[஀-௿]"), ("Taml", "ta")),
+    (re.compile(r"[က-႟]"), ("Mymr", "my")),
+)
+
+
+def script_tag_for(text):
+    """(HarfBuzz script tag, language) for `text`, or None to let HB guess."""
+    for rx, tag in _SCRIPT_TAGS:
+        if rx.search(text or ""):
+            return tag
+    return None
+
 # Bundled Khmer font families (all from Google Fonts, SIL OFL license).
 # Every family also covers basic Latin, so mixed ខ្មែរ + English text works.
 KHMER_FONTS = {
@@ -323,13 +374,25 @@ def _try_font(name, px, bold, vf=False):
 
 
 def load_font(px, text="", bold=True, family=None):
-    """Pick a font that can draw `text` (Khmer + Latin), honoring the
-    user-selected Khmer `family` when given."""
-    if family in KHMER_FONTS:
+    """Pick a font that can draw `text`, honoring the user-selected Khmer
+    `family` when given.
+
+    A Khmer family is only honored for Khmer text — drawing Thai or Hangul in
+    a Khmer face yields tofu, so those resolve to their own script font first.
+    """
+    if family in KHMER_FONTS and text_has_khmer(text):
         spec = KHMER_FONTS[family]
         fname = spec.get("bold") if (bold and spec.get("bold")) else spec["file"]
         font = _try_font(os.path.join(FONT_DIR, fname), px, bold,
                          vf=spec.get("vf", False))
+        if font is not None:
+            return font
+
+    # Korean/Thai/Indic etc. Hangul is precomposed so Pillow draws it fine —
+    # it just needs a face that has the glyphs.
+    script_path = resolve_script_font_path(text, bold)
+    if script_path:
+        font = _try_font(script_path, px, bold)
         if font is not None:
             return font
 
@@ -371,6 +434,60 @@ def resolve_khmer_font_path(family=None, bold=True):
         if os.path.exists(p):
             return p, False
     return None, False
+
+
+# Shaping fonts for the non-Khmer complex scripts. Bundled file first, then
+# the usual system fallbacks. Nirmala UI (Windows) covers all Indic scripts.
+# Per-script faces: (regex, bundled regular, bundled bold, system fallbacks).
+# Real weight files only — synthetic bold closes the counters on Khmer
+# subscripts and Thai marks, so we never fake it.
+SCRIPT_FONTS = (
+    (re.compile(r"[฀-๿]"), "NotoSansThai-Regular.ttf", "NotoSansThai-Bold.ttf",
+     ("leelawui.ttf", "tahoma.ttf")),
+    (re.compile(r"[ऀ-ॿ]"), "NotoSansDevanagari-Regular.ttf",
+     "NotoSansDevanagari-Bold.ttf", ("Nirmala.ttf", "nirmala.ttf", "mangal.ttf")),
+    (re.compile(r"[஀-௿]"), "NotoSansTamil-Regular.ttf", "NotoSansTamil-Bold.ttf",
+     ("Nirmala.ttf", "nirmala.ttf", "latha.ttf")),
+    (re.compile(r"[가-힣ᄀ-ᇿ㄰-㆏]"), "NanumSquare-Regular.ttf",
+     "NanumSquare-Bold.ttf", ("malgun.ttf", "malgunbd.ttf", "gulim.ttc")),
+    (re.compile(r"[຀-໿]"), "NotoSansLao-Regular.ttf", "NotoSansLao-Bold.ttf",
+     ("phetsarath.ttf",)),
+    (re.compile(r"[က-႟]"), "NotoSansMyanmar-Regular.ttf",
+     "NotoSansMyanmar-Bold.ttf", ("mmrtext.ttf",)),
+)
+
+
+def resolve_script_font_path(text, bold=True):
+    """Bundled/system font file covering `text`, or None. Khmer excluded —
+    it keeps its own family picker via resolve_khmer_font_path()."""
+    windir = os.environ.get("WINDIR", r"C:\Windows")
+    for rx, regular, bold_file, sysnames in SCRIPT_FONTS:
+        if not rx.search(text or ""):
+            continue
+        for name in ((bold_file, regular) if bold else (regular, bold_file)):
+            p = os.path.join(FONT_DIR, name)
+            if os.path.exists(p):
+                return p
+        for name in sysnames:
+            for p in (os.path.join(windir, "Fonts", name),
+                      os.path.join("/usr/share/fonts/truetype", name)):
+                if os.path.exists(p):
+                    return p
+        break
+    return None
+
+
+def resolve_shaping_font_path(text, family=None, bold=True):
+    """Font file able to shape `text`, or (None, False).
+
+    Khmer keeps the existing family picker. Other complex scripts resolve to a
+    bundled Noto face. Returning None makes TextEngine fall back to Pillow
+    rather than draw Thai in a Khmer font.
+    """
+    if text_has_khmer(text):
+        return resolve_khmer_font_path(family, bold)
+    p = resolve_script_font_path(text, bold)
+    return (p, False) if p else (None, False)
 
 
 def _force_buffer(buf, *, script, direction, language):
@@ -452,11 +569,13 @@ class _HBFont:
         import uharfbuzz as hb
         buf = hb.Buffer()
         buf.add_str(text)
-        if text_has_khmer(text):
-            # Force Khmer shaping so ជើង (subscripts) and pre-base vowels are
-            # reordered correctly. guess_segment_properties() alone leaves the
-            # language at the machine locale, which can misfire on Windows.
-            _force_buffer(buf, script="Khmr", direction="ltr", language="km")
+        tag = script_tag_for(text)
+        if tag:
+            # Force the script explicitly so ជើង (subscripts), Thai mark
+            # stacking and Devanagari matra reordering are applied.
+            # guess_segment_properties() alone leaves the language at the
+            # machine locale, which can misfire on Windows.
+            _force_buffer(buf, script=tag[0], direction="ltr", language=tag[1])
         else:
             buf.guess_segment_properties()
         hb.shape(self.hb_font, buf)
@@ -513,8 +632,8 @@ class TextEngine:
     def __init__(self, px, sample_text="", family=None, bold=True):
         self.px = px
         self.hb = None
-        if text_has_khmer(sample_text) and khmer_shaper_available():
-            path, vf = resolve_khmer_font_path(family, bold)
+        if text_needs_shaping(sample_text) and khmer_shaper_available():
+            path, vf = resolve_shaping_font_path(sample_text, family, bold)
             if path:
                 try:
                     self.hb = _HBFont.get(path, px, bold, vf)
@@ -560,20 +679,165 @@ def _alpha_mask(mask, color):
     return mask.point(lambda v: v * alpha // 255)
 
 
+def _starts_cluster(ch, prev):
+    """True if `ch` begins a new orthographic cluster after `prev`.
+
+    A cluster is a base character plus everything that stacks on or reorders
+    around it. Breaking inside one produces tofu (a Khmer ជើង cut off its base,
+    a Thai mark orphaned from its consonant), so these are the only legal
+    break points inside a spaceless run.
+    """
+    o, p = ord(ch), (ord(prev) if prev else 0)
+
+    # --- Khmer: consonants + independent vowels start a cluster, unless the
+    # previous char was coeng U+17D2, which binds the next consonant beneath.
+    if 0x1780 <= o <= 0x17B3:
+        return p != 0x17D2
+    if 0x1780 <= o <= 0x17FF:
+        return False          # dependent vowels, signs, coeng itself
+
+    # --- Thai / Lao: base consonants and leading vowels start a cluster.
+    # A leading vowel (เ แ โ ใ ไ) is stored before its consonant, so the
+    # consonant after one continues the same cluster.
+    if 0x0E01 <= o <= 0x0E2E or 0x0E81 <= o <= 0x0EAE:
+        return not (0x0E40 <= p <= 0x0E44 or 0x0EC0 <= p <= 0x0EC4)
+    if 0x0E40 <= o <= 0x0E44 or 0x0EC0 <= o <= 0x0EC4:
+        return True
+    if 0x0E00 <= o <= 0x0EFF:
+        return False          # tone marks, sara am, phinthu, etc.
+
+    # --- Myanmar: virama/asat bind the following letter to the cluster.
+    if 0x1000 <= o <= 0x102A:
+        return p not in (0x1039, 0x103A)
+    if 0x1000 <= o <= 0x109F:
+        return False
+
+    # --- CJK / Kana break between any two ideographs, but never before a
+    # closing bracket or trailing punctuation.
+    if 0x3040 <= o <= 0x30FF or 0x4E00 <= o <= 0x9FFF:
+        return ch not in "。、」』）】〉》・ー々"
+
+    return True
+
+
+def split_clusters(run):
+    """Split a spaceless run into non-breakable orthographic clusters."""
+    if not run:
+        return []
+    out, cur = [], run[0]
+    for i in range(1, len(run)):
+        ch = run[i]
+        if _starts_cluster(ch, run[i - 1]):
+            out.append(cur)
+            cur = ch
+        else:
+            cur += ch
+    out.append(cur)
+    return out
+
+
 def wrap_text(text, max_width, width_func):
-    words = text.split()
-    if not words:
+    """Greedy wrap that works for spaced AND spaceless scripts.
+
+    Khmer, Thai, Lao, Myanmar and CJK write without spaces, so text.split()
+    yields one giant token for them. When a whitespace token is still too wide
+    we fall back to packing orthographic clusters, which always breaks and
+    never splits a cluster.
+    """
+    if not (text or "").strip():
         return [text]
-    lines, cur = [], words[0]
-    for word in words[1:]:
-        trial = cur + " " + word
+
+    lines, cur = [], ""
+
+    def flush():
+        nonlocal cur
+        if cur:
+            lines.append(cur)
+            cur = ""
+
+    for word in text.split():
+        trial = (cur + " " + word) if cur else word
         if width_func(trial) <= max_width:
             cur = trial
-        else:
-            lines.append(cur)
+            continue
+
+        # Word does not fit on the current line.
+        if width_func(word) <= max_width:
+            flush()
             cur = word
-    lines.append(cur)
-    return lines
+            continue
+
+        # Word does not fit on a line of its own -> break it by cluster.
+        flush()
+        for cl in split_clusters(word):
+            trial = cur + cl
+            if cur and width_func(trial) > max_width:
+                flush()
+                cur = cl
+            else:
+                cur = trial
+    flush()
+    return lines or [text]
+
+
+# Caption block may occupy at most this fraction of frame height before
+# fit_text() starts shrinking the type.
+SUBTITLE_MAX_H_FRAC = 0.26
+SUBTITLE_MAX_LINES = 3
+
+# Per-script line height. Khmer stacks up to 3 levels and Thai up to 4, so a
+# leading that looks fine for Latin clips their subscripts.
+_LINE_HEIGHTS = (
+    (re.compile(r"[ក-៿]"), 1.75),     # Khmer
+    (re.compile(r"[฀-๿຀-໿]"), 1.65),  # Thai / Lao
+    (re.compile(r"[஀-௿]"), 1.70),     # Tamil
+    (re.compile(r"[ऀ-ॿ]"), 1.60),     # Devanagari
+    (re.compile(r"[가-힣ᄀ-ᇿ]"), 1.45),  # Hangul
+)
+
+
+def line_height_for(text):
+    for rx, lh in _LINE_HEIGHTS:
+        if rx.search(text or ""):
+            return lh
+    return 1.35
+
+
+def fit_text(text, max_w, max_h, start_px, family=None,
+             min_px=10, max_lines=SUBTITLE_MAX_LINES):
+    """Largest font size at which `text` wraps inside (max_w, max_h).
+
+    Returns (TextEngine, px, lines). Measurement uses the real TextEngine —
+    the same one that draws — so what fits here is what fits on screen, at
+    preview size and at export size alike. Replaces the old fixed
+    `px = h * 0.045` that could not shrink and simply overflowed.
+    """
+    start_px = max(int(start_px), min_px)
+    lh = line_height_for(text)
+    best = None
+
+    lo, hi = min_px, start_px
+    while lo <= hi:
+        px = (lo + hi) // 2
+        te = TextEngine(px, text, family)
+        lines = wrap_text(text, max_w, te.width)
+        block_h = int((te.ascent + te.descent) * lh) * len(lines)
+        widest = max((te.width(l) for l in lines), default=0)
+        if len(lines) <= max_lines and block_h <= max_h and widest <= max_w:
+            best = (te, px, lines)
+            lo = px + 1
+        else:
+            hi = px - 1
+
+    if best is None:
+        # Even min_px overflows. Draw at the floor rather than clip mid-glyph,
+        # and let the caller know the cue needs editing.
+        te = TextEngine(min_px, text, family)
+        lines = wrap_text(text, max_w, te.width)
+        if len(lines) > max_lines:
+            lines = lines[:max_lines]
+        best = (te, min_px, lines)
+    return best
 
 
 # --------------------------------------------------------------------------
@@ -1200,12 +1464,13 @@ def draw_subtitle(frame, text, style, c1, c2, family=None, scale=1.0, y_frac=0.8
     if not text:
         return
     w, h = frame.size
-    px = max(13, int(h * 0.045 * scale))
-    te = TextEngine(px, text, family)
+    box_px = max(w * 0.82, 1)
+    te, px, lines = fit_text(text, box_px, h * SUBTITLE_MAX_H_FRAC,
+                            int(h * 0.045 * scale), family,
+                            min_px=max(8, int(h * 0.022 * scale)))
     draw = ImageDraw.Draw(frame, "RGBA")
-    lines = wrap_text(text, int(w * 0.82), te.width)
     asc, desc = te.ascent, te.descent
-    line_h = int((asc + desc) * 1.18)
+    line_h = int((asc + desc) * line_height_for(text))
     total_h = line_h * len(lines)
     y0 = int(h * y_frac) - total_h
     stroke = max(2, px // 12)
@@ -2080,17 +2345,42 @@ def _encoder_works(name):
         return False
 
 
-def pick_video_codec(use_gpu):
-    """(codec, extra_opts). Falls back to libx264 when no GPU encoder works."""
+def h264_level_for(w, h):
+    """Lowest conforming H.264 level for this frame size at <=30 fps.
+
+    Level 4.2 caps out at 8704 macroblocks, which 1440p (14400) and 2160p
+    (32400) both exceed — tagging those 4.2 produces a non-conforming stream.
+    """
+    mbs = ((int(w) + 15) // 16) * ((int(h) + 15) // 16)
+    for level, max_mbs in (("4.0", 8192), ("4.2", 8704),
+                           ("5.0", 22080), ("5.1", 36864)):
+        if mbs <= max_mbs:
+            return level
+    return "5.2"
+
+
+def pick_video_codec(use_gpu, size=(1920, 1080)):
+    """(codec, extra_opts). Falls back to libx264 when no GPU encoder works.
+
+    Quality-first settings: these templates are full-frame neon gradients,
+    which band and smear badly on fast presets and low fixed bitrates.
+    """
+    level = h264_level_for(*size)
+    common = ["-profile:v", "high", "-level", level, "-bf", "3", "-g", "60"]
     if use_gpu:
         for name, gpu_opts in (
-            ("h264_nvenc", ["-preset", "fast", "-b:v", "12M"]),
-            ("h264_amf", ["-b:v", "12M"]),
-            ("h264_qsv", ["-b:v", "12M"]),
+            ("h264_nvenc", ["-preset", "p6", "-tune", "hq", "-rc", "vbr",
+                            "-cq", "19", "-b:v", "16M", "-maxrate", "25M",
+                            "-bufsize", "32M", "-spatial-aq", "1",
+                            "-aq-strength", "8"]),
+            ("h264_amf", ["-quality", "quality", "-rc", "vbr_latency",
+                          "-b:v", "16M", "-maxrate", "25M"]),
+            ("h264_qsv", ["-preset", "veryslow", "-global_quality", "20",
+                          "-look_ahead", "1", "-b:v", "16M", "-maxrate", "25M"]),
         ):
             if _encoder_works(name):
-                return name, gpu_opts
-    return "libx264", ["-preset", "fast", "-crf", "18"]
+                return name, gpu_opts + common
+    return "libx264", ["-preset", "slow", "-crf", "16"] + common
 
 
 # --------------------------------------------------------------------------
@@ -2215,7 +2505,7 @@ def render_video(image_path, audio_path, out_path, opts,
     assets = prepare_assets(image_path, an, size, opts)
 
     w, h = size
-    v_codec, v_opts = pick_video_codec(opts.get("use_gpu"))
+    v_codec, v_opts = pick_video_codec(opts.get("use_gpu"), (w, h))
     audio_filters = build_audio_filters(opts, an.duration)
     use_parallel = an.num_frames >= PARALLEL_MIN_FRAMES and (os.cpu_count() or 1) > 1
 
@@ -2240,13 +2530,19 @@ def render_video(image_path, audio_path, out_path, opts,
         else:
             cmd += ["-i", audio_paths[0]]
 
-        a_bitrate = "256k" if MASTER_PRESETS.get(opts.get("master", "Off")) else "192k"
         cmd += [
             "-map", "0:v:0", "-map", "1:a:0",
             "-c:v", v_codec,
         ] + v_opts + [
+            # Subtle dither before the 8-bit chroma conversion: neon gradients
+            # band badly in yuv420p otherwise. Must run BEFORE format=.
+            "-vf", "noise=alls=2:allf=t+u,format=yuv420p",
             "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-b:a", a_bitrate,
+            # Always tag bt709. Untagged files make YouTube guess, and
+            # saturated/neon content comes back washed out.
+            "-color_primaries", "bt709", "-color_trc", "bt709",
+            "-colorspace", "bt709",
+            "-c:a", "aac", "-b:a", "320k", "-ar", "48000",
         ]
         if audio_filters:
             cmd += ["-af", ",".join(audio_filters)]
