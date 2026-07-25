@@ -393,11 +393,23 @@ class MainWindow(FramelessWindow):
 
         self.btn_export = QPushButton(t("export_now"))
         self.btn_export.setObjectName("Primary")
+        self.btn_export.clicked.connect(self._start_export)
         inner.addWidget(self.btn_export)
+
+        self.btn_cancel = QPushButton(t("cancel"))
+        self.btn_cancel.setVisible(False)
+        self.btn_cancel.clicked.connect(self._cancel_export)
+        inner.addWidget(self.btn_cancel)
 
         self.bar = QProgressBar()
         self.bar.setValue(0)
         inner.addWidget(self.bar)
+
+        self.lbl_export = QLabel("")
+        self.lbl_export.setObjectName("Hint")
+        self.lbl_export.setWordWrap(True)
+        inner.addWidget(self.lbl_export)
+
         lay.addWidget(box)
         lay.addStretch(1)
         return page
@@ -477,6 +489,95 @@ class MainWindow(FramelessWindow):
             self.status.setText(f"Image failed: {exc}")
             return
         self.preview.render()
+
+    # ---------------- export ----------------
+    def _start_export(self):
+        if getattr(self, "_worker", None) and self._worker.isRunning():
+            return
+        audio = self.drop_audio.path
+        if not audio:
+            self._select_page(0)
+            self.status.setText(t("no_audio"))
+            self.lbl_export.setText(t("no_audio"))
+            return
+
+        default = os.path.splitext(os.path.basename(audio))[0] + ".mp4"
+        out, _ = QFileDialog.getSaveFileName(
+            self, en("export_now"), default, "MP4 video (*.mp4)")
+        if not out:
+            return
+
+        from .exporter import ExportJob, ExportWorker
+        job = ExportJob(
+            audio_path=audio,
+            out_path=out,
+            template_key=self.preview.template_key,
+            image_path=self.drop_image.path,
+            size=RESOLUTIONS[self.cmb_res.currentIndex()][1],
+            fps=int(self.cmb_fps.currentText().split()[0]),
+            use_gpu=self.cmb_q.currentIndex() == 1,
+            title=self.ed_title.text(),
+            artist=self.ed_artist.text(),
+            tracks=tuple(self.preview.tracks),
+            cues=tuple(self.preview.cues),
+            font_family=self.preview.font_family,
+        )
+
+        self._worker = ExportWorker(job, self)
+        self._worker.stage.connect(self.lbl_export.setText)
+        self._worker.progress.connect(self._on_export_progress)
+        self._worker.finished_ok.connect(self._on_export_done)
+        self._worker.failed.connect(self._on_export_failed)
+        self._worker.cancelled.connect(self._on_export_cancelled)
+
+        self.preview.pause()
+        self.btn_play.setText("▶")
+        self._set_exporting(True)
+        self.bar.setRange(0, 100)
+        self.bar.setValue(0)
+        self._worker.start()
+
+    def _set_exporting(self, on):
+        self.btn_export.setEnabled(not on)
+        self.btn_cancel.setVisible(on)
+        for w in (self.cmb_res, self.cmb_fps, self.cmb_q):
+            w.setEnabled(not on)
+
+    def _cancel_export(self):
+        if getattr(self, "_worker", None):
+            self.lbl_export.setText("Cancelling…")
+            self._worker.cancel()
+
+    def _on_export_progress(self, done, total):
+        pct = int(done * 100 / max(1, total))
+        self.bar.setValue(pct)
+        self.lbl_export.setText(f"{done} / {total} frames  ·  {pct}%")
+        self.status.setText(f"{km('export_now')} {pct}%")
+
+    def _on_export_done(self, path):
+        self._set_exporting(False)
+        self.bar.setValue(100)
+        self.lbl_export.setText(f"✅ {os.path.basename(path)}")
+        self.status.setText(f"{km('ready')} · {path}")
+
+    def _on_export_failed(self, msg):
+        self._set_exporting(False)
+        self.bar.setValue(0)
+        self.lbl_export.setText(f"❌ {msg}")
+        self.status.setText("Export failed")
+
+    def _on_export_cancelled(self):
+        self._set_exporting(False)
+        self.bar.setValue(0)
+        self.lbl_export.setText("Cancelled")
+        self.status.setText(t("ready"))
+
+    def closeEvent(self, event):
+        w = getattr(self, "_worker", None)
+        if w and w.isRunning():
+            w.cancel()
+            w.wait(3000)
+        super().closeEvent(event)
 
     def _import_lyrics(self):
         p, _ = QFileDialog.getOpenFileName(

@@ -26,6 +26,7 @@ waveform ribbon along the floor and the motion is a gentle tape wobble.
 import math
 
 import numpy as np
+from PIL import Image, ImageChops
 
 from .base import (Ctx, LyricStyle, Palette, Template, ease_in_out,
                    lerp_rgb, vertical_gradient)
@@ -55,13 +56,41 @@ def _font(ctx, scale=0.024):
     return _LABEL_CACHE[px], px
 
 
-def _paper_grain(ctx: Ctx, strength=7):
+_GRAIN_CACHE = {}
+_GRAIN_PAD = 192
+
+
+def _grain_field(shape, strength):
+    """One oversized noise IMAGE, generated once and slid around per frame.
+
+    Two costs were hiding here. Fresh RNG per frame was ~3.7M ints at 1440p,
+    and the numpy round-trip (asarray -> add -> clip -> fromarray) touched 11M
+    elements in Python-visible arrays. Caching a uint8 noise image lets the
+    per-frame work happen entirely inside PIL's C blend path.
+    """
+    h, w = shape
+    key = (h, w, strength)
+    field = _GRAIN_CACHE.get(key)
+    if field is None:
+        rng = np.random.default_rng(1000)
+        arr = rng.integers(0, 2 * strength + 1,
+                           (h + _GRAIN_PAD, w + _GRAIN_PAD, 3), dtype=np.uint8)
+        field = Image.fromarray(arr, "RGB")
+        _GRAIN_CACHE.clear()
+        _GRAIN_CACHE[key] = field
+    return field
+
+
+def _paper_grain(ctx: Ctx, strength=6):
     """Film grain — also breaks up banding in the warm gradient."""
-    rng = np.random.default_rng(1000 + (ctx.i // 2))
-    arr = np.asarray(ctx.frame, dtype=np.int16)
-    noise = rng.integers(-strength, strength + 1, arr.shape[:2], dtype=np.int16)
-    arr = np.clip(arr + noise[:, :, None], 0, 255).astype(np.uint8)
-    ctx.frame.paste(__import__("PIL.Image", fromlist=["Image"]).fromarray(arr))
+    h, w = ctx.h, ctx.w
+    field = _grain_field((h, w), strength)
+    # Slide the window each frame so the grain crawls like real film.
+    ox = (ctx.i * 53) % _GRAIN_PAD
+    oy = (ctx.i * 37) % _GRAIN_PAD
+    noise = field.crop((ox, oy, ox + w, oy + h))
+    # (frame + noise) - strength, clipped, all in C.
+    ctx.frame.paste(ImageChops.add(ctx.frame, noise, 1.0, -strength))
 
 
 def _cassette(ctx: Ctx, pal):
