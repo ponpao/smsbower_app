@@ -568,15 +568,21 @@ class VisualizerFrame(ctk.CTkFrame):
             return None
 
     def _init_license(self):
-        """Check license in the background; lock the UI until it is active."""
+        """Licensing is off by default — every function is unlocked.
+
+        Set TRAVKOD_LICENSE_REQUIRED=1 to re-enable the gate. That path still
+        needs a real Apps Script deployment: license_client.WEB_APP_URL and
+        LICENSE_SECRET must be filled in, otherwise no code can ever activate.
+        """
+        if os.environ.get("TRAVKOD_LICENSE_REQUIRED") != "1":
+            self._apply_lock(True, "")
+            if hasattr(self, "lic_btn"):
+                self.lic_btn.pack_forget()
+            return
+
         lic = self._load_license_module()
         if lic is None:
-            # license module missing: run unlocked unless a lock is enforced
-            if os.environ.get("TRAVKOD_LICENSE_REQUIRED") == "1":
-                self._apply_lock(False, "")
-            else:
-                self._apply_lock(True, "")
-                self.lic_btn.pack_forget()
+            self._apply_lock(False, "")
             return
         self._set_lic_btn("checking")
 
@@ -606,8 +612,11 @@ class VisualizerFrame(ctk.CTkFrame):
         if licensed:
             self._remove_lock_overlay()
             self._set_lic_btn("ok")
-            who = f" · {owner}" if owner else ""
-            self._status(f"✅ License active{who} — សល់ {days} ថ្ងៃ")
+            if owner or days:
+                who = f" · {owner}" if owner else ""
+                self._status(f"✅ License active{who} — សល់ {days} ថ្ងៃ")
+            else:
+                self._status("✅ រួចរាល់ (Ready)")
         else:
             self._show_lock_overlay()
             self._set_lic_btn("locked")
