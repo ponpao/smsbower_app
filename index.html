@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="km" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="description" content="TK Story Studio — trim stories, expand them into cinematic articles, and generate AI image prompts.">
+<meta name="theme-color" content="#f6f2fb" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#141020" media="(prefers-color-scheme: dark)">
+<title>TK Story Studio</title>
+
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 40'%3E%3Cpath d='M4 6C14 2 20 4 24 8v26c-4-4-10-6-20-2Z' fill='%23ff5d8f'/%3E%3Cpath d='M44 6C34 2 28 4 24 8v26c4-4 10-6 20-2Z' fill='%238b7ff0'/%3E%3C/svg%3E">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Kantumruy+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/app.css">
+</head>
+<body>
+
+<a class="skip-link" href="#main" data-i18n="a11y.skip">រំលងទៅមាតិកា</a>
+
+<header class="topbar">
+  <div class="topbar__inner">
+    <div class="brand">
+      <span class="brand__mark" aria-hidden="true">
+        <svg viewBox="0 0 48 40" fill="none">
+          <path d="M4 6C14 2 20 4 24 8v26c-4-4-10-6-20-2Z" fill="var(--accent)"/>
+          <path d="M44 6C34 2 28 4 24 8v26c4-4 10-6 20-2Z" fill="var(--lav)"/>
+        </svg>
+      </span>
+      <span class="brand__text">
+        <strong>TK Story Studio</strong>
+        <small data-i18n="app.tagline">កាត់អត្ថបទ · ពង្រីកជា Cinematic · បង្កើត AI prompt</small>
+      </span>
+    </div>
+
+    <nav class="tabbar" id="tabbar" aria-label="Sections">
+      <button class="tab is-active" data-view="studio" aria-current="page">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h9l5 5v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z"/><path d="M14 4v5h5"/></svg>
+        <span data-i18n="nav.studio">ស្ទូឌីយោ</span>
+      </button>
+      <button class="tab" data-view="visuals">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="m4 17 5-5 4 4 3-2 4 4"/></svg>
+        <span data-i18n="nav.visuals">រូបភាព</span>
+      </button>
+      <button class="tab" data-view="library">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h5v14H4zM10.5 5h4v14h-4zM16.5 5.6l3.5.9-3 13.3-3.4-.9z"/></svg>
+        <span data-i18n="nav.library">បណ្ណាល័យ</span>
+      </button>
+    </nav>
+
+    <div class="topbar__actions">
+      <button class="conn-pill" id="connPill" type="button" aria-live="polite">
+        <span class="dot" id="connDot" aria-hidden="true"></span>
+        <span id="connLabel" data-i18n="conn.idle">មិនទាន់ភ្ជាប់</span>
+      </button>
+      <button class="icon-btn" id="langBtn" type="button" title="ភាសា / Language">EN</button>
+      <button class="icon-btn" id="themeBtn" type="button" title="Theme">
+        <svg class="i-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.2M12 19.3v2.2M4.2 4.2l1.6 1.6M18.2 18.2l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.2 19.8l1.6-1.6M18.2 5.8l1.6-1.6"/></svg>
+        <svg class="i-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z"/></svg>
+      </button>
+      <button class="icon-btn" id="settingsBtn" type="button" title="Settings" aria-haspopup="dialog">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 13.5a7.6 7.6 0 0 0 0-3l1.8-1.3-1.9-3.3-2.1.8a7.7 7.7 0 0 0-2.6-1.5L14.3 3H9.7l-.3 2.2a7.7 7.7 0 0 0-2.6 1.5l-2.1-.8-1.9 3.3 1.8 1.3a7.6 7.6 0 0 0 0 3l-1.8 1.3 1.9 3.3 2.1-.8a7.7 7.7 0 0 0 2.6 1.5l.3 2.2h4.6l.3-2.2a7.7 7.7 0 0 0 2.6-1.5l2.1.8 1.9-3.3Z"/></svg>
+      </button>
+    </div>
+  </div>
+  <div class="progress" id="progress" hidden><span></span></div>
+</header>
+
+<main id="main">
+
+  <!-- ══════════ STUDIO ══════════ -->
+  <section class="view is-active" id="view-studio" aria-labelledby="studio-h">
+    <h1 class="view__title" id="studio-h" data-i18n="studio.heading">សាច់រឿង → អត្ថបទ Cinematic</h1>
+
+    <div class="grid grid--split">
+
+      <article class="card card--source">
+        <header class="card__head">
+          <h2 data-i18n="studio.source.title">សាច់រឿងដើម</h2>
+          <span class="badge" data-i18n="badge.step1">ជំហាន ១</span>
+        </header>
+        <p class="muted" data-i18n="studio.source.hint">រាល់ប្រយោគរបស់អ្នកត្រូវរក្សាទុកដដែល — AI គ្រាន់តែពង្រីកបន្ថែម។</p>
+
+        <div class="field">
+          <label class="sr-only" for="storyRaw" data-i18n="studio.source.title">សាច់រឿងដើម</label>
+          <textarea id="storyRaw" rows="9" spellcheck="false"
+            data-i18n-attr="placeholder:studio.source.placeholder"
+            placeholder="បិទភ្ជាប់សាច់រឿងដើមនៅទីនេះ..."></textarea>
+          <div class="stats" id="sourceStats"></div>
+        </div>
+
+        <div class="row row--actions">
+          <button class="btn btn--primary" id="generateBtn" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 2.2 5.6L20 10.8l-5.8 2.2L12 19l-2.2-6L4 10.8l5.8-2.2Z"/></svg>
+            <span data-i18n="action.generate">បង្កើតជា Cinematic</span>
+          </button>
+          <button class="btn btn--ghost" id="stopBtn" type="button" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+            <span data-i18n="action.stop">បញ្ឈប់</span>
+          </button>
+          <kbd class="kbd" id="genKbd">⌘↵</kbd>
+        </div>
+
+        <p class="status" id="genStatus" role="status" aria-live="polite"></p>
+
+        <details class="disclosure">
+          <summary data-i18n="studio.tuning">ការកំណត់ការបង្កើត</summary>
+          <div class="grid grid--4 tuning">
+            <label class="field field--sm">
+              <span data-i18n="cfg.paraMin">កថាខណ្ឌ អប្បបរមា</span>
+              <input type="number" id="paraMin" min="1" max="60" value="10">
+            </label>
+            <label class="field field--sm">
+              <span data-i18n="cfg.paraMax">កថាខណ្ឌ អតិបរមា</span>
+              <input type="number" id="paraMax" min="1" max="80" value="20">
+            </label>
+            <label class="field field--sm">
+              <span data-i18n="cfg.wordMin">ពាក្យ អប្បបរមា</span>
+              <input type="number" id="wordMin" min="100" max="8000" step="50" value="1000">
+            </label>
+            <label class="field field--sm">
+              <span data-i18n="cfg.titleWords">ពាក្យក្នុងចំណងជើង</span>
+              <input type="number" id="titleWords" min="4" max="40" value="20">
+            </label>
+          </div>
+        </details>
+      </article>
+
+      <article class="card card--output">
+        <header class="card__head">
+          <h2 data-i18n="studio.output.title">លទ្ធផល</h2>
+          <span class="badge" data-i18n="badge.step2">ជំហាន ២</span>
+        </header>
+
+        <div class="field">
+          <div class="field__head">
+            <label for="titleOut" data-i18n="field.title">ចំណងជើង Viral</label>
+            <button class="btn btn--mini" type="button" data-copy="titleOut" data-i18n="action.copy">ចម្លង</button>
+          </div>
+          <input type="text" id="titleOut" data-i18n-attr="placeholder:field.title.placeholder"
+            placeholder="ចំណងជើងនឹងបង្ហាញនៅទីនេះ...">
+        </div>
+
+        <div class="field">
+          <div class="field__head">
+            <label for="captionOut" data-i18n="field.caption">Caption សម្រាប់ Facebook</label>
+            <button class="btn btn--mini" type="button" data-copy="captionOut" data-i18n="action.copy">ចម្លង</button>
+          </div>
+          <textarea id="captionOut" rows="3" data-i18n-attr="placeholder:field.caption.placeholder"
+            placeholder="Caption នឹងបង្ហាញនៅទីនេះ..."></textarea>
+        </div>
+
+        <div class="field field--grow">
+          <div class="field__head">
+            <label for="fullText" data-i18n="field.article">អត្ថបទពេញ</label>
+            <button class="btn btn--mini" type="button" data-copy="fullText" data-i18n="action.copy">ចម្លង</button>
+          </div>
+          <textarea id="fullText" rows="12" data-i18n-attr="placeholder:field.article.placeholder"
+            placeholder="បិទភ្ជាប់អត្ថបទ ឬបង្កើតវាខាងលើ..."></textarea>
+          <div class="stats" id="articleStats"></div>
+        </div>
+
+        <div class="row row--actions">
+          <button class="btn btn--lav" id="toVisualsBtn" type="button">
+            <span data-i18n="action.toVisuals">បន្តទៅរូបភាព</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6"/></svg>
+          </button>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- ══════════ VISUALS ══════════ -->
+  <section class="view" id="view-visuals" aria-labelledby="visuals-h" hidden>
+    <h1 class="view__title" id="visuals-h" data-i18n="visuals.heading">អត្ថបទកាត់ → AI image prompt</h1>
+
+    <div class="grid grid--split">
+
+      <article class="card">
+        <header class="card__head">
+          <h2 data-i18n="visuals.trim.title">កាត់អត្ថបទ</h2>
+          <span class="badge" data-i18n="badge.step3">ជំហាន ៣</span>
+        </header>
+
+        <div class="trim-controls">
+          <label class="field field--sm">
+            <span data-i18n="visuals.trim.length">ប្រវែង (តួអក្សរ)</span>
+            <input type="number" id="trimLen" min="80" max="4000" step="10" value="550">
+          </label>
+          <input type="range" id="trimRange" class="range" min="80" max="2000" step="10" value="550"
+            data-i18n-attr="aria-label:visuals.trim.length">
+        </div>
+
+        <div class="seg" id="trimModeSeg" role="group" data-i18n-attr="aria-label:visuals.trim.mode">
+          <button class="seg__btn is-active" data-trim="sentence" data-i18n="trim.mode.sentence">ចុងប្រយោគ</button>
+          <button class="seg__btn" data-trim="word" data-i18n="trim.mode.word">ចុងពាក្យ</button>
+          <button class="seg__btn" data-trim="hard" data-i18n="trim.mode.hard">តួអក្សរច្បាស់</button>
+        </div>
+
+        <div class="field field--grow">
+          <div class="field__head">
+            <label for="trimmedOut" data-i18n="visuals.trim.output">លទ្ធផលកាត់</label>
+            <button class="btn btn--mini" type="button" data-copy="trimmedOut" data-i18n="action.copy">ចម្លង</button>
+          </div>
+          <textarea id="trimmedOut" rows="9" readonly></textarea>
+          <div class="stats" id="trimStats"></div>
+        </div>
+      </article>
+
+      <article class="card">
+        <header class="card__head">
+          <h2 data-i18n="visuals.styles.title">ជ្រើសរើស Style</h2>
+          <span class="badge badge--lav" id="styleCount">11</span>
+        </header>
+        <div class="style-grid" id="styleGrid" role="radiogroup" data-i18n-attr="aria-label:visuals.styles.title"></div>
+      </article>
+
+    </div>
+
+    <article class="card card--prompt">
+      <header class="card__head">
+        <h2 data-i18n="visuals.prompt.title">Prompt ពេញ</h2>
+        <span class="badge" data-i18n="badge.step4">ជំហាន ៤</span>
+      </header>
+
+      <div class="row row--wrap">
+        <div class="seg" id="modeSeg" role="group" data-i18n-attr="aria-label:visuals.prompt.mode">
+          <button class="seg__btn is-active" data-mode="static" data-i18n="mode.static">🖼️ រូបភាព</button>
+          <button class="seg__btn" data-mode="animate" data-i18n="mode.animate">🎬 វីដេអូ + តន្ត្រី</button>
+        </div>
+        <div class="seg seg--ratio" id="ratioSeg" role="group" data-i18n-attr="aria-label:visuals.prompt.ratio">
+          <button class="seg__btn" data-ratio="1:1">1:1</button>
+          <button class="seg__btn" data-ratio="4:5">4:5</button>
+          <button class="seg__btn is-active" data-ratio="9:16">9:16</button>
+          <button class="seg__btn" data-ratio="16:9">16:9</button>
+        </div>
+      </div>
+
+      <div class="field field--grow">
+        <label class="sr-only" for="promptOut" data-i18n="visuals.prompt.title">Prompt ពេញ</label>
+        <textarea id="promptOut" class="mono" rows="12" readonly></textarea>
+      </div>
+
+      <div class="row row--actions">
+        <button class="btn btn--primary" type="button" data-copy="promptOut" data-i18n="action.copyPrompt">ចម្លង Prompt</button>
+        <button class="btn btn--ghost" id="downloadPromptBtn" type="button" data-i18n="action.download">ទាញយក .txt</button>
+      </div>
+    </article>
+  </section>
+
+  <!-- ══════════ LIBRARY ══════════ -->
+  <section class="view" id="view-library" aria-labelledby="library-h" hidden>
+    <h1 class="view__title" id="library-h" data-i18n="library.heading">ប្រវត្តិបង្កើត</h1>
+    <div class="card">
+      <header class="card__head">
+        <h2 data-i18n="library.title">អត្ថបទដែលបានរក្សាទុក</h2>
+        <button class="btn btn--mini btn--danger" id="clearHistoryBtn" type="button" data-i18n="library.clear">លុបទាំងអស់</button>
+      </header>
+      <ul class="history" id="historyList"></ul>
+      <p class="empty" id="historyEmpty" data-i18n="library.empty">មិនទាន់មានអត្ថបទណាមួយទេ។ បង្កើតមួយនៅក្នុងស្ទូឌីយោ។</p>
+    </div>
+  </section>
+
+</main>
+
+<!-- ══════════ SETTINGS DRAWER ══════════ -->
+<div class="scrim" id="scrim" hidden></div>
+<aside class="drawer" id="settingsPanel" role="dialog" aria-modal="true" aria-labelledby="settings-h" hidden>
+  <header class="drawer__head">
+    <h2 id="settings-h" data-i18n="settings.title">ការកំណត់</h2>
+    <button class="icon-btn" id="closeSettingsBtn" type="button" data-i18n-attr="aria-label:action.close">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+    </button>
+  </header>
+
+  <div class="drawer__body">
+    <section class="drawer__section">
+      <h3 data-i18n="settings.api">ការតភ្ជាប់ Anthropic</h3>
+      <label class="field">
+        <span data-i18n="settings.key">API key</span>
+        <span class="input-wrap">
+          <input type="password" id="apiKeyInput" placeholder="sk-ant-..." autocomplete="off" spellcheck="false">
+          <button class="icon-btn icon-btn--inset" id="toggleKeyBtn" type="button" data-i18n-attr="aria-label:settings.keyShow">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+        </span>
+      </label>
+      <div class="row row--actions">
+        <button class="btn btn--mint" id="connectBtn" type="button" data-i18n="settings.connect">ពិនិត្យការតភ្ជាប់</button>
+      </div>
+      <p class="hint" data-i18n="settings.keyHint">Key រក្សាទុកតែក្នុង browser របស់អ្នក (localStorage) ហើយផ្ញើទៅ Anthropic ប៉ុណ្ណោះ។ ប្រុងប្រយ័ត្ន៖ key ក្នុង client-side code មើលឃើញតាម network tab — សមរម្យសម្រាប់ tool ផ្ទាល់ខ្លួន មិនសមរម្យសម្រាប់ website សាធារណៈទេ។</p>
+    </section>
+
+    <section class="drawer__section">
+      <h3 data-i18n="settings.model">ម៉ូដែល</h3>
+      <label class="field">
+        <span class="sr-only" data-i18n="settings.model">ម៉ូដែល</span>
+        <select id="modelSelect">
+          <option value="claude-opus-5">Claude Opus 5 — គុណភាពខ្ពស់បំផុត</option>
+          <option value="claude-sonnet-5">Claude Sonnet 5 — លឿន + ល្អ</option>
+          <option value="claude-haiku-4-5">Claude Haiku 4.5 — ថោក, លឿនបំផុត</option>
+        </select>
+      </label>
+      <p class="hint" id="modelHint"></p>
+    </section>
+
+    <section class="drawer__section">
+      <h3 data-i18n="settings.appearance">រូបរាង</h3>
+      <div class="seg seg--full" id="themeSeg" role="group" data-i18n-attr="aria-label:settings.appearance">
+        <button class="seg__btn" data-theme-choice="light" data-i18n="theme.light">ភ្លឺ</button>
+        <button class="seg__btn" data-theme-choice="dark" data-i18n="theme.dark">ងងឹត</button>
+        <button class="seg__btn" data-theme-choice="system" data-i18n="theme.system">ប្រព័ន្ធ</button>
+      </div>
+      <div class="seg seg--full" id="langSeg" role="group" data-i18n-attr="aria-label:settings.language">
+        <button class="seg__btn" data-lang-choice="km">ខ្មែរ</button>
+        <button class="seg__btn" data-lang-choice="en">English</button>
+      </div>
+    </section>
+
+    <section class="drawer__section">
+      <h3 data-i18n="settings.data">ទិន្នន័យ</h3>
+      <p class="hint" data-i18n="settings.dataHint">សេចក្ដីព្រាង ប្រវត្តិ និងការកំណត់ទាំងអស់ស្ថិតក្នុង browser នេះតែប៉ុណ្ណោះ។</p>
+      <div class="row row--actions">
+        <button class="btn btn--danger" id="clearDataBtn" type="button" data-i18n="settings.clearData">លុបទិន្នន័យទាំងអស់</button>
+      </div>
+    </section>
+  </div>
+</aside>
+
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+<script src="assets/js/prompts.js"></script>
+<script src="assets/js/app.js"></script>
+</body>
+</html>

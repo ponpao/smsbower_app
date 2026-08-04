@@ -1,0 +1,20 @@
+{
+  "name": "TK Story Studio",
+  "short_name": "TK Studio",
+  "description": "Trim stories, expand them into cinematic articles, and generate AI image prompts.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f5f2fa",
+  "theme_color": "#ff5d8f",
+  "lang": "km",
+  "icons": [
+    {
+      "src": "assets/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
