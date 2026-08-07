@@ -1,0 +1,248 @@
+.tk-article-panel {
+	background: linear-gradient(180deg, #14161f 0%, #1b1e2b 100%);
+	border: 1px solid #2a2e40;
+	border-radius: 10px;
+	padding: 24px;
+	margin: 20px 0;
+	color: #e7e9f5;
+}
+
+.tk-article-header {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	margin-bottom: 18px;
+}
+
+.tk-article-logo {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 42px;
+	height: 42px;
+	border-radius: 10px;
+	background: linear-gradient(135deg, #6c5ce7, #00cec9);
+	color: #fff;
+	font-weight: 700;
+	letter-spacing: 0.5px;
+	flex-shrink: 0;
+}
+
+.tk-article-heading h2 {
+	margin: 0;
+	font-size: 16px;
+	color: #fff;
+}
+
+.tk-article-heading p {
+	margin: 2px 0 0;
+	font-size: 12px;
+	color: #9a9fc0;
+}
+
+.tk-article-tabs {
+	display: flex;
+	gap: 6px;
+	border-bottom: 1px solid #2a2e40;
+	margin-bottom: 16px;
+}
+
+.tk-article-tab {
+	background: none;
+	border: none;
+	color: #9a9fc0;
+	padding: 10px 16px;
+	font-size: 13px;
+	font-weight: 600;
+	cursor: pointer;
+	border-bottom: 2px solid transparent;
+}
+
+.tk-article-tab.is-active {
+	color: #fff;
+	border-bottom-color: #6c5ce7;
+}
+
+.tk-article-tabpanel {
+	display: none;
+}
+
+.tk-article-tabpanel.is-active {
+	display: block;
+}
+
+.tk-article-subtoggle {
+	display: inline-flex;
+	background: #10121a;
+	border-radius: 8px;
+	padding: 3px;
+	margin-bottom: 14px;
+}
+
+.tk-article-subtab {
+	background: none;
+	border: none;
+	color: #9a9fc0;
+	padding: 6px 12px;
+	font-size: 12px;
+	border-radius: 6px;
+	cursor: pointer;
+}
+
+.tk-article-subtab.is-active {
+	background: #2a2e40;
+	color: #fff;
+}
+
+.tk-article-mode {
+	display: none;
+}
+
+.tk-article-mode.is-active {
+	display: block;
+}
+
+.tk-article-label {
+	display: block;
+	font-size: 12px;
+	font-weight: 600;
+	color: #9a9fc0;
+	margin: 12px 0 6px;
+	text-transform: uppercase;
+	letter-spacing: 0.4px;
+}
+
+.tk-article-input,
+.tk-article-textarea {
+	width: 100%;
+	background: #10121a;
+	border: 1px solid #2a2e40;
+	border-radius: 8px;
+	color: #e7e9f5;
+	padding: 10px 12px;
+	font-size: 13px;
+	box-sizing: border-box;
+}
+
+.tk-article-textarea {
+	resize: vertical;
+}
+
+.tk-article-inline {
+	display: flex;
+	gap: 8px;
+}
+
+.tk-article-inline .tk-article-input {
+	flex: 1;
+}
+
+.tk-article-hint {
+	font-size: 12px;
+	color: #767ba0;
+	margin: 8px 0 0;
+}
+
+.tk-article-btn {
+	background: #262a3c;
+	border: 1px solid #363b52;
+	color: #e7e9f5;
+	padding: 9px 14px;
+	border-radius: 8px;
+	font-size: 12px;
+	font-weight: 600;
+	cursor: pointer;
+	white-space: nowrap;
+}
+
+.tk-article-btn:hover:not(:disabled) {
+	background: #323752;
+}
+
+.tk-article-btn:disabled {
+	opacity: 0.45;
+	cursor: not-allowed;
+}
+
+.tk-article-btn-primary {
+	background: linear-gradient(135deg, #6c5ce7, #4834d4);
+	border-color: transparent;
+}
+
+.tk-article-btn-primary:hover:not(:disabled) {
+	filter: brightness(1.08);
+}
+
+.tk-article-btn.is-busy {
+	opacity: 0.7;
+}
+
+.tk-article-status {
+	margin: 16px 0;
+	padding: 10px 14px;
+	border-radius: 8px;
+	font-size: 13px;
+}
+
+.tk-article-status.is-success {
+	background: rgba(0, 184, 148, 0.15);
+	border: 1px solid rgba(0, 184, 148, 0.4);
+	color: #55efc4;
+}
+
+.tk-article-status.is-error {
+	background: rgba(255, 90, 90, 0.12);
+	border: 1px solid rgba(255, 90, 90, 0.4);
+	color: #ff8a8a;
+}
+
+.tk-article-status.is-info {
+	background: rgba(108, 92, 231, 0.12);
+	border: 1px solid rgba(108, 92, 231, 0.4);
+	color: #b6aeff;
+}
+
+.tk-article-toolbar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	padding-top: 16px;
+	border-top: 1px solid #2a2e40;
+}
+
+.tk-article-toolbar-label {
+	font-size: 12px;
+	font-weight: 700;
+	color: #9a9fc0;
+	text-transform: uppercase;
+	letter-spacing: 0.4px;
+	margin-right: 4px;
+}
+
+.tk-article-caption-output {
+	margin-top: 14px;
+}
+
+.tk-article-footer {
+	display: flex;
+	justify-content: space-between;
+	margin-top: 18px;
+	padding-top: 14px;
+	border-top: 1px solid #2a2e40;
+	font-size: 11px;
+	color: #767ba0;
+}
+
+.tk-article-footer a {
+	color: #9a9fc0;
+	text-decoration: none;
+}
+
+.tk-article-footer a:hover {
+	color: #fff;
+}
+
+.tk-article-settings .form-table th {
+	width: 220px;
+}
