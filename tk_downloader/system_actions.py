@@ -52,14 +52,34 @@ def shutdown_pc(dry_run: bool = False) -> tuple[bool, str]:
         return False, f"Shutdown failed: {exc}"
 
 
+def _open_native(path: str) -> None:
+    if sys.platform.startswith("win"):
+        os.startfile(path)  # type: ignore[attr-defined]
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", path])
+    else:
+        subprocess.Popen(["xdg-open", path])
+
+
 def open_folder(path: str) -> None:
     """Reveal a folder in the OS file manager (used by the 'Open folder' button)."""
     try:
-        if sys.platform.startswith("win"):
-            os.startfile(path)  # type: ignore[attr-defined]
-        elif sys.platform == "darwin":
-            subprocess.Popen(["open", path])
-        else:
-            subprocess.Popen(["xdg-open", path])
+        _open_native(path)
     except (OSError, subprocess.SubprocessError, AttributeError):
         pass
+
+
+def play_file(path: str) -> bool:
+    """Launch a downloaded video with the OS's default player.
+
+    Used by each queue row's "Play" button — distinct from ``open_folder``,
+    which only reveals the containing directory. Returns ``False`` (without
+    raising) if the file no longer exists or nothing is registered to open it.
+    """
+    if not path or not os.path.isfile(path):
+        return False
+    try:
+        _open_native(path)
+        return True
+    except (OSError, subprocess.SubprocessError, AttributeError):
+        return False

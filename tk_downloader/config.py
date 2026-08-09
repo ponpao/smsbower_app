@@ -70,6 +70,9 @@ class Settings:
     group_by_profile: bool = False
     rate_limit_kib: int = 0                    # 0 = unlimited
     retries: int = 5
+    save_by_profile_folder: bool = True        # <download_dir>/<profile>/<file> instead of flat
+    fetch_limit: int = 0                       # max videos pulled per pasted profile link, 0 = all
+    ffmpeg_path: str = ""                      # explicit ffmpeg.exe/binary, overrides PATH search
 
     # -- persistence ---------------------------------------------------------------
     @classmethod

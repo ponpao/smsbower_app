@@ -103,7 +103,8 @@ class QueueItem:
     downloaded_bytes: int = 0
     filepath: str = ""
     error: str = ""
-    position: int = 0                 # queue order; also feeds Num_Title naming
+    position: int = 0                 # global queue insertion order
+    profile_position: int = 0         # 1-based rank *within its own profile*
     session_id: str = ""
     added_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)

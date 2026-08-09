@@ -21,6 +21,7 @@
   "action.cancel_shutdown": "Cancel shutdown",
   "action.resume_yes": "Resume previous session",
   "action.resume_no": "Start fresh",
+  "action.play": "Play video",
 
   "section.links": "Video & profile links",
   "section.output": "Save to folder",
@@ -32,6 +33,12 @@
 
   "links.hint": "Paste many links at once — profiles and single videos together:\nhttps://www.tiktok.com/@profile\nhttps://www.facebook.com/username/videos\nhttps://www.instagram.com/reel/xxxxxxxx/",
   "links.note": "Profiles are expanded automatically and every video is tagged with the profile it came from.",
+  "links.fetch_limit": "Max videos per profile",
+  "links.fetch_limit_all": "All",
+  "links.fetch_limit_hint": "Leave empty to fetch every video from a pasted profile link, or set a number to only fetch that many most-recent videos.",
+
+  "output.per_profile_folder": "Save each profile in its own folder",
+  "output.per_profile_folder_hint": "Videos are saved into <download folder>/<profile>/ instead of one shared folder.",
 
   "naming.id_only": "ID only  ->  ID.mp4 + ID.txt   (recommended)",
   "naming.title_only": "Title only",
@@ -57,7 +64,9 @@
   "perf.mode_cpu": "CPU: FFmpeg uses every available core.",
   "perf.mode_gpu": "GPU: FFmpeg uses hardware acceleration when available.",
   "perf.mode_none": "FFmpeg runs with its default settings.",
-  "perf.ffmpeg_missing": "FFmpeg was not found — merging 1080p streams and mp3 conversion are unavailable.",
+  "perf.ffmpeg_missing": "FFmpeg not found — 1080p+ merging and mp3 conversion are unavailable. Use \"Locate ffmpeg…\" or add it to PATH.",
+  "perf.ffmpeg_found": "FFmpeg found: {path}",
+  "perf.locate_ffmpeg": "Locate ffmpeg…",
 
   "cookies.browser": "Browser",
   "cookies.none": "None",
@@ -78,7 +87,8 @@
   "stats.active": "Active",
   "stats.failed": "Failed",
 
-  "table.num": "#",
+  "table.num": "No",
+  "table.select_all": "Select / deselect all",
   "table.profile": "Profile",
   "table.title": "Title",
   "table.video_id": "Video ID",
@@ -93,6 +103,9 @@
   "filter.profile": "Profile",
   "filter.group": "Group by profile",
   "filter.search": "Search title or ID",
+
+  "toolbar.selected_count": "{count} selected",
+  "toolbar.clear_selection": "Clear selection",
 
   "status.queued": "Queued",
   "status.extracting": "Reading",
@@ -137,5 +150,6 @@
   "msg.batch_done": "Batch finished: {done} done, {failed} failed.",
   "msg.resumed": "Resumed {count} item(s) from the previous session.",
   "msg.session_discarded": "Previous session discarded.",
-  "msg.shutdown_cancelled": "Shutdown cancelled."
+  "msg.shutdown_cancelled": "Shutdown cancelled.",
+  "msg.play_failed": "Couldn't open that video — the file may have been moved or deleted."
 }

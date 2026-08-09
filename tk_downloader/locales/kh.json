@@ -21,6 +21,7 @@
   "action.cancel_shutdown": "បោះបង់ការបិទកុំព្យូទ័រ",
   "action.resume_yes": "បន្តវគ្គមុន",
   "action.resume_no": "ចាប់ផ្ដើមថ្មី",
+  "action.play": "ចាក់វីដេអូ",
 
   "section.links": "តំណវីដេអូ និងប្រវត្តិរូប",
   "section.output": "ថតសម្រាប់រក្សាទុក",
@@ -32,6 +33,12 @@
 
   "links.hint": "បិទភ្ជាប់តំណច្រើនក្នុងពេលតែមួយ — ទាំងប្រវត្តិរូប និងវីដេអូតែមួយ៖\nhttps://www.tiktok.com/@profile\nhttps://www.facebook.com/username/videos\nhttps://www.instagram.com/reel/xxxxxxxx/",
   "links.note": "ប្រវត្តិរូបនឹងត្រូវបំបែកជាវីដេអូដោយស្វ័យប្រវត្តិ ហើយវីដេអូនីមួយៗត្រូវបានសម្គាល់តាមប្រវត្តិរូបដើម។",
+  "links.fetch_limit": "ចំនួនវីដេអូអតិបរមាក្នុងមួយប្រវត្តិរូប",
+  "links.fetch_limit_all": "ទាំងអស់",
+  "links.fetch_limit_hint": "ទុកឲ្យទទេដើម្បីទាញយកវីដេអូទាំងអស់ពីប្រវត្តិរូបដែលបិទភ្ជាប់ ឬដាក់លេខដើម្បីទាញយកតែវីដេអូថ្មីៗចំនួននោះប៉ុណ្ណោះ។",
+
+  "output.per_profile_folder": "រក្សាទុកប្រវត្តិរូបនីមួយៗក្នុងថតដាច់ដោយឡែក",
+  "output.per_profile_folder_hint": "វីដេអូនឹងរក្សាទុកក្នុង <ថតទាញយក>/<ប្រវត្តិរូប>/ ជំនួសឲ្យថតរួមតែមួយ។",
 
   "naming.id_only": "លេខសម្គាល់ (ID) តែប៉ុណ្ណោះ  ->  ID.mp4 + ID.txt   (ណែនាំ)",
   "naming.title_only": "ចំណងជើងតែប៉ុណ្ណោះ",
@@ -57,7 +64,9 @@
   "perf.mode_cpu": "CPU៖ FFmpeg ប្រើគ្រប់ស្នូលដែលមាន។",
   "perf.mode_gpu": "GPU៖ FFmpeg ប្រើការបង្កើនល្បឿនផ្នែករឹងនៅពេលមាន។",
   "perf.mode_none": "FFmpeg ដំណើរការតាមការកំណត់ដើម។",
-  "perf.ffmpeg_missing": "រកមិនឃើញ FFmpeg — ការបញ្ចូលគ្នា 1080p និងការបំប្លែងទៅ mp3 មិនអាចប្រើបានទេ។",
+  "perf.ffmpeg_missing": "រកមិនឃើញ FFmpeg — ការបញ្ចូលគ្នា 1080p ឡើងទៅ និងការបំប្លែងទៅ mp3 មិនអាចប្រើបានទេ។ សូមប្រើ «ស្វែងរក ffmpeg…» ឬបន្ថែមវាទៅ PATH។",
+  "perf.ffmpeg_found": "រកឃើញ FFmpeg៖ {path}",
+  "perf.locate_ffmpeg": "ស្វែងរក ffmpeg…",
 
   "cookies.browser": "កម្មវិធីរុករក",
   "cookies.none": "គ្មាន",
@@ -79,6 +88,7 @@
   "stats.failed": "បរាជ័យ",
 
   "table.num": "លេខ",
+  "table.select_all": "ជ្រើស / មិនជ្រើសទាំងអស់",
   "table.profile": "ប្រវត្តិរូប",
   "table.title": "ចំណងជើង",
   "table.video_id": "លេខសម្គាល់វីដេអូ",
@@ -93,6 +103,9 @@
   "filter.profile": "ប្រវត្តិរូប",
   "filter.group": "ដាក់ជាក្រុមតាមប្រវត្តិរូប",
   "filter.search": "ស្វែងរកចំណងជើង ឬ ID",
+
+  "toolbar.selected_count": "បានជ្រើស {count}",
+  "toolbar.clear_selection": "សម្អាតការជ្រើសរើស",
 
   "status.queued": "រង់ចាំ",
   "status.extracting": "កំពុងអាន",
@@ -137,5 +150,6 @@
   "msg.batch_done": "បញ្ចប់៖ រួចរាល់ {done} បរាជ័យ {failed}។",
   "msg.resumed": "បានបន្ត {count} ធាតុពីវគ្គមុន។",
   "msg.session_discarded": "បានបោះបង់វគ្គមុន។",
-  "msg.shutdown_cancelled": "បានបោះបង់ការបិទកុំព្យូទ័រ។"
+  "msg.shutdown_cancelled": "បានបោះបង់ការបិទកុំព្យូទ័រ។",
+  "msg.play_failed": "មិនអាចបើកវីដេអូនេះបានទេ — ឯកសារប្រហែលជាត្រូវបានផ្លាស់ទី ឬលុបចោល។"
 }

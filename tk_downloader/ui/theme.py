@@ -87,9 +87,19 @@ def build_theme(dark: bool, font_family: str | None = None) -> ft.Theme:
         outline_variant=palette.border,
         surface_tint=palette.accent,
     )
+    # Rounded, flat-elevation buttons everywhere instead of Material's default
+    # sharp corners + drop shadow — a big part of the "modern" look on its own.
+    pill_shape = ft.RoundedRectangleBorder(radius=10)
+    pill_style = ft.ButtonStyle(shape=pill_shape, elevation=0,
+                                padding=ft.Padding.symmetric(horizontal=18, vertical=12))
     return ft.Theme(
         color_scheme=scheme,
         font_family=font_family,
         visual_density=ft.VisualDensity.COMPACT,
         scaffold_bgcolor=palette.bg,
+        filled_button_theme=ft.FilledButtonTheme(style=pill_style),
+        outlined_button_theme=ft.OutlinedButtonTheme(style=pill_style),
+        text_button_theme=ft.TextButtonTheme(
+            style=ft.ButtonStyle(shape=pill_shape, elevation=0)
+        ),
     )

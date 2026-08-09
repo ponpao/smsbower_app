@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS items (
     filepath         TEXT DEFAULT '',
     error            TEXT DEFAULT '',
     position         INTEGER DEFAULT 0,
+    profile_position INTEGER DEFAULT 0,
     session_id       TEXT DEFAULT '',
     added_at         REAL DEFAULT 0,
     updated_at       REAL DEFAULT 0
@@ -65,8 +66,8 @@ CREATE TABLE IF NOT EXISTS meta (
 _COLUMNS = (
     "uid", "url", "profile", "source_url", "video_id", "title", "uploader",
     "duration", "status", "progress", "speed", "eta", "total_bytes",
-    "downloaded_bytes", "filepath", "error", "position", "session_id",
-    "added_at", "updated_at",
+    "downloaded_bytes", "filepath", "error", "position", "profile_position",
+    "session_id", "added_at", "updated_at",
 )
 
 
@@ -90,9 +91,22 @@ class StateStore:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA synchronous=NORMAL")
             self._conn.executescript(_SCHEMA)
+            self._migrate()
             self._conn.commit()
 
         self.session_id = uuid.uuid4().hex[:12]
+
+    def _migrate(self) -> None:
+        """Add columns introduced after a user's database already exists.
+
+        ``CREATE TABLE IF NOT EXISTS`` only helps on a brand new file — an
+        existing ``queue_state.db`` from an earlier release keeps its old
+        column set, so new columns are added here with ``ALTER TABLE`` when
+        missing. Existing rows get the column's default value.
+        """
+        existing = {row["name"] for row in self._conn.execute("PRAGMA table_info(items)")}
+        if "profile_position" not in existing:
+            self._conn.execute("ALTER TABLE items ADD COLUMN profile_position INTEGER DEFAULT 0")
 
     # -- lifecycle -------------------------------------------------------------------
     def close(self) -> None:

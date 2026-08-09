@@ -32,20 +32,31 @@ import os
 from pathlib import Path
 
 from .models import NamingMode, QueueItem
-from .utils import atomic_write_text, human_bytes
+from .utils import atomic_write_text, human_bytes, safe_filename
 
 SIDECAR_SUFFIX = ".txt"
 
 
 def output_template(mode: NamingMode, position: int = 0) -> str:
-    """yt-dlp ``outtmpl`` fragment (file name only, the folder is set separately)."""
+    """yt-dlp ``outtmpl`` fragment (file name only, the folder is set separately).
+
+    ``position`` is the item's rank *within its own profile* (see
+    ``QueueItem.profile_position``), not the global queue order — so numbering
+    for ``NUM_TITLE`` restarts at 1 for every new profile, matching the
+    per-profile output folder below.
+    """
     if mode is NamingMode.ID_ONLY:
         # Exactly "<id>.<ext>" — nothing else, ever.
         return "%(id)s.%(ext)s"
     if mode is NamingMode.TITLE_ONLY:
         return "%(title)s.%(ext)s"
-    # NUM_TITLE: stable, queue-ordered numbering.
+    # NUM_TITLE: stable, per-profile numbering.
     return f"{position:03d}_%(title)s.%(ext)s"
+
+
+def profile_subdir(profile: str) -> str:
+    """Filesystem-safe folder name for a profile, e.g. ``@mechdesign98``."""
+    return safe_filename(profile or "unknown", max_len=80) or "unknown"
 
 
 def naming_example(mode: NamingMode, video_ext: str = "mp4", position: int = 1) -> tuple[str, str]:

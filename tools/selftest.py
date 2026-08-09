@@ -21,15 +21,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import sqlite3
+import time as _time
+
 from tk_downloader.config import Settings                     # noqa: E402
 from tk_downloader.downloader import (                         # noqa: E402
-    ffmpeg_acceleration_args, format_selector,
+    DownloadManager, ffmpeg_acceleration_args, format_selector,
 )
 from tk_downloader.i18n import LANGUAGES, Translator           # noqa: E402
 from tk_downloader.models import ItemStatus, NamingMode, QueueItem, Quality  # noqa: E402
 from tk_downloader.monitor import SystemMonitor                # noqa: E402
 from tk_downloader.naming import (                             # noqa: E402
-    naming_example, output_template, sidecar_path_for, write_sidecar,
+    naming_example, output_template, profile_subdir, sidecar_path_for, write_sidecar,
 )
 from tk_downloader.state import StateStore                     # noqa: E402
 from tk_downloader.utils import format_clock, human_bytes, parse_links  # noqa: E402
@@ -106,6 +109,117 @@ def test_formats() -> None:
     check("GPU only -> hwaccel only", ffmpeg_acceleration_args(False, True).keys() == {"ffmpeg_i"})
     check("CPU only -> threads only", ffmpeg_acceleration_args(True, False).keys() == {"ffmpeg"})
     check("Neither -> no extra args", ffmpeg_acceleration_args(False, False) == {})
+
+
+def test_profile_numbering_and_folders() -> None:
+    print("\n== Per-profile numbering & output folders ==")
+    with tempfile.TemporaryDirectory() as tmp:
+        store = StateStore(Path(tmp) / "q.db", Path(tmp) / "a.txt")
+        settings = Settings()
+        settings.download_dir = tmp
+        manager = DownloadManager(settings, store)
+
+        added = manager._append([
+            QueueItem(url="https://x/@alice/1", profile="@alice"),
+            QueueItem(url="https://x/@alice/2", profile="@alice"),
+            QueueItem(url="https://x/@bob/1", profile="@bob"),
+            QueueItem(url="https://x/@alice/3", profile="@alice"),
+        ])
+        check("All 4 fresh items were added", added == 4)
+        by_url = {i.url: i for i in manager.items}
+        check("Alice's 1st video is No. 1",
+              by_url["https://x/@alice/1"].profile_position == 1)
+        check("Alice's 2nd video is No. 2",
+              by_url["https://x/@alice/2"].profile_position == 2)
+        check("Bob's video restarts at No. 1 despite being added 3rd overall",
+              by_url["https://x/@bob/1"].profile_position == 1)
+        check("Alice's 3rd video is No. 3 (not disturbed by Bob's item)",
+              by_url["https://x/@alice/3"].profile_position == 3)
+        check("Global queue position still increases monotonically",
+              [manager.items[i].position for i in range(4)] == [1, 2, 3, 4])
+
+        check("Profile folder name is filesystem-safe",
+              profile_subdir("@weird/name:1") not in ("", "@weird/name:1"))
+        check("Profile folder name is stable for a normal handle",
+              profile_subdir("@mechdesign98") == "@mechdesign98")
+
+        store.close()
+
+
+def test_selection_start() -> None:
+    print("\n== Table-selection download (start with a subset) ==")
+    with tempfile.TemporaryDirectory() as tmp:
+        store = StateStore(Path(tmp) / "q.db", Path(tmp) / "a.txt")
+        settings = Settings()
+        settings.download_dir = tmp
+        manager = DownloadManager(settings, store)
+        manager._append([
+            QueueItem(url="https://x/1", profile="@p"),
+            QueueItem(url="https://x/2", profile="@p"),
+            QueueItem(url="https://x/3", profile="@p"),
+        ])
+        target = manager.items[1]
+
+        # Stand in for the real network call: mark whichever item start() hands
+        # us as completed, so we can see exactly which ones it decided to run.
+        ran: list[str] = []
+
+        def fake_run_item(item: QueueItem) -> None:
+            ran.append(item.uid)
+            item.set_status(ItemStatus.COMPLETED)
+
+        manager._run_item = fake_run_item  # type: ignore[method-assign]
+        started = manager.start(subset_uids={target.uid})
+        for _ in range(50):
+            if not manager.is_running:
+                break
+            _time.sleep(0.05)
+
+        check("Only the selected item was submitted", started == 1, str(started))
+        check("Only the selected item actually ran", ran == [target.uid], str(ran))
+        check("Unselected items are still queued",
+              all(i.status_enum is ItemStatus.QUEUED for i in manager.items if i is not target))
+        check("Selected item completed", target.status_enum is ItemStatus.COMPLETED)
+
+        store.close()
+
+
+def test_db_migration() -> None:
+    print("\n== Database migration (old schema -> current) ==")
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "q.db"
+        # Build a database exactly like a pre-upgrade release would have left
+        # behind: every current column *except* profile_position.
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("""
+            CREATE TABLE items (
+                uid TEXT PRIMARY KEY, url TEXT NOT NULL, profile TEXT DEFAULT '',
+                source_url TEXT DEFAULT '', video_id TEXT DEFAULT '', title TEXT DEFAULT '',
+                uploader TEXT DEFAULT '', duration REAL DEFAULT 0, status TEXT DEFAULT 'queued',
+                progress REAL DEFAULT 0, speed REAL DEFAULT 0, eta REAL DEFAULT -1,
+                total_bytes INTEGER DEFAULT 0, downloaded_bytes INTEGER DEFAULT 0,
+                filepath TEXT DEFAULT '', error TEXT DEFAULT '', position INTEGER DEFAULT 0,
+                session_id TEXT DEFAULT '', added_at REAL DEFAULT 0, updated_at REAL DEFAULT 0
+            )
+        """)
+        conn.execute(
+            "INSERT INTO items (uid, url, profile, position) VALUES ('abc','https://x/1','@old',1)"
+        )
+        conn.commit()
+        conn.close()
+
+        # Opening it with the current StateStore must not raise, must add the
+        # missing column, and must keep the pre-existing row intact.
+        store = StateStore(db_path, Path(tmp) / "a.txt")
+        rows = store.load_all()
+        check("Old database opens without error", len(rows) == 1)
+        check("Pre-existing row survived the migration",
+              rows and rows[0].url == "https://x/1", str(rows))
+        check("New column defaulted to 0 on the old row",
+              rows and rows[0].profile_position == 0)
+        store.upsert(QueueItem(url="https://x/2", profile="@old", profile_position=2))
+        check("New rows can use the migrated column", len(store.load_all()) == 2)
+        store.close()
 
 
 def test_state() -> None:
@@ -217,6 +331,9 @@ def test_utils() -> None:
 def main() -> int:
     test_naming()
     test_formats()
+    test_profile_numbering_and_folders()
+    test_selection_start()
+    test_db_migration()
     test_state()
     test_settings_and_i18n()
     test_monitor()

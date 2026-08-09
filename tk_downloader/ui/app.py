@@ -18,19 +18,20 @@ from __future__ import annotations
 import asyncio
 import time
 from pathlib import Path
+from typing import Callable
 
 import flet as ft
 
 from .. import __version__
 from ..config import Settings, app_data_dir, archive_path, state_path
 from ..cookies import SUPPORTED_BROWSERS, verify_browser_cookies
-from ..downloader import DownloadManager, has_ffmpeg
+from ..downloader import DownloadManager, find_ffmpeg
 from ..i18n import LANGUAGES, Translator
 from ..models import ItemStatus, NamingMode, QueueItem, Quality
 from ..monitor import SystemMonitor, SystemSnapshot
 from ..naming import naming_example
 from ..state import StateStore
-from ..system_actions import SHUTDOWN_GRACE_SECONDS, open_folder, shutdown_pc
+from ..system_actions import SHUTDOWN_GRACE_SECONDS, open_folder, play_file, shutdown_pc
 from ..utils import format_clock, human_speed
 from .theme import Palette, build_theme
 from .widgets import (
@@ -80,9 +81,13 @@ class TKApp:
         self._status_message = ""
         self._shutdown_dialog: ft.AlertDialog | None = None
         self._shutdown_cancelled = False
+        self._selected: set[str] = set()          # uids checked in the queue table
+        self._sort_key = "no"                     # see widgets.SORTABLE_COLUMNS
+        self._sort_desc = False
 
         self._configure_page()
         self.build()
+        self._log_ffmpeg_status()
         self._restore_previous_session()
         self.monitor.start()
         self.page.run_task(self._ui_tick)
@@ -142,6 +147,20 @@ class TKApp:
         while not path.exists() and path.parent != path:
             path = path.parent
         return str(path)
+
+    def _log_ffmpeg_status(self) -> None:
+        """Report whether FFmpeg was located, and where — the #1 cause of a
+        "Best" download silently capping below 1080p is FFmpeg not being found,
+        which makes yt-dlp fall back to a single progressive stream instead of
+        merging the best available video and audio tracks."""
+        found = find_ffmpeg(self.settings.ffmpeg_path)
+        if found:
+            self._append_log(f"FFmpeg found: {found}")
+        else:
+            self._append_log(
+                "FFmpeg not found. 1080p+ merging and mp3 conversion are unavailable "
+                "until you install FFmpeg or set its location in Performance."
+            )
 
     # =====================================================================================
     # Build
@@ -207,11 +226,19 @@ class TKApp:
         self.t.bind(self.theme_button, "tooltip",
                     "theme.to_light" if dark else "theme.to_dark")
 
-        return ft.AppBar(
-            leading=ft.Container(
-                content=ft.Icon(ft.Icons.DOWNLOAD_FOR_OFFLINE, color=self.palette.accent, size=28),
-                padding=ft.Padding.only(left=14),
+        icon_badge = ft.Container(
+            content=ft.Icon(ft.Icons.DOWNLOAD_FOR_OFFLINE, color="#04121A", size=22),
+            width=38, height=38,
+            alignment=ft.Alignment.CENTER,
+            border_radius=11,
+            gradient=ft.LinearGradient(
+                begin=ft.Alignment.TOP_LEFT, end=ft.Alignment.BOTTOM_RIGHT,
+                colors=[self.palette.accent, ft.Colors.with_opacity(0.55, self.palette.accent)],
             ),
+        )
+
+        return ft.AppBar(
+            leading=ft.Container(content=icon_badge, padding=ft.Padding.only(left=14)),
             leading_width=56,
             title=ft.Column([title, subtitle], spacing=0, tight=True),
             center_title=False,
@@ -266,6 +293,22 @@ class TKApp:
         note = ft.Text(size=11, color=self.palette.text_dim)
         self.t.bind(note, "value", "links.note")
 
+        fetch_limit_label = ft.Text(size=12, color=self.palette.text)
+        self.t.bind(fetch_limit_label, "value", "links.fetch_limit")
+        self.fetch_limit_field = ft.TextField(
+            value=str(self.settings.fetch_limit) if self.settings.fetch_limit else "",
+            dense=True,
+            text_size=12,
+            width=72,
+            text_align=ft.TextAlign.CENTER,
+            border_color=self.palette.border,
+            input_filter=ft.NumbersOnlyInputFilter(),
+            on_change=self._on_fetch_limit_change,
+        )
+        self.t.bind(self.fetch_limit_field, "hint_text", "links.fetch_limit_all")
+        fetch_limit_hint = ft.Text(size=11, color=self.palette.text_dim)
+        self.t.bind(fetch_limit_hint, "value", "links.fetch_limit_hint")
+
         return card(
             ft.Column(
                 [
@@ -273,6 +316,11 @@ class TKApp:
                     self.links_field,
                     ft.Row([self.add_button, clear_button], spacing=8),
                     note,
+                    ft.Row(
+                        [fetch_limit_label, self.fetch_limit_field],
+                        spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    fetch_limit_hint,
                 ],
                 spacing=10,
                 tight=True,
@@ -300,12 +348,23 @@ class TKApp:
                                on_click=lambda e: open_folder(self.settings.download_dir))
         self.t.bind(reveal, "tooltip", "action.open_folder")
 
+        self.profile_folder_checkbox = ft.Checkbox(
+            value=self.settings.save_by_profile_folder,
+            active_color=self.palette.accent,
+            on_change=self._on_profile_folder_toggle,
+        )
+        self.t.bind(self.profile_folder_checkbox, "label", "output.per_profile_folder")
+        profile_folder_hint = ft.Text(size=11, color=self.palette.text_dim)
+        self.t.bind(profile_folder_hint, "value", "output.per_profile_folder_hint")
+
         return card(
             ft.Column(
                 [
                     section_title(heading, self.palette, ft.Icons.SAVE),
                     ft.Row([self.folder_field, browse, reveal], spacing=2,
                            vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    self.profile_folder_checkbox,
+                    profile_folder_hint,
                 ],
                 spacing=10,
                 tight=True,
@@ -440,16 +499,23 @@ class TKApp:
         self.accel_hint = ft.Text(size=11, color=self.palette.text_dim)
         self._refresh_accel_hint()
 
+        # A status line that can run long ("FFmpeg not found — ...") sits on its
+        # own row so it can wrap freely; the button goes underneath rather than
+        # sharing a row, which would push it past the card's edge.
+        self.ffmpeg_status = ft.Text(size=11, weight=ft.FontWeight.W_600)
+        self.locate_ffmpeg_button = ft.OutlinedButton(
+            icon=ft.Icons.FOLDER_OPEN, on_click=self._on_locate_ffmpeg,
+        )
+        self.t.bind(self.locate_ffmpeg_button, "content", "perf.locate_ffmpeg")
+        self._refresh_ffmpeg_status()
+
         children: list[ft.Control] = [
             section_title(heading, self.palette, ft.Icons.SPEED),
             ft.Row([self.cpu_checkbox, self.gpu_checkbox], spacing=14),
             self.accel_hint,
+            self.ffmpeg_status,
+            self.locate_ffmpeg_button,
         ]
-
-        if not has_ffmpeg():
-            warning = ft.Text(size=11, color=self.palette.status_color(ItemStatus.ERROR.value))
-            self.t.bind(warning, "value", "perf.ffmpeg_missing")
-            children.append(warning)
 
         return card(ft.Column(children, spacing=10, tight=True), self.palette)
 
@@ -653,6 +719,22 @@ class TKApp:
                                       on_change=self._on_group_toggle)
         self.t.bind(self.group_switch, "label", "filter.group")
 
+        self.selection_text = ft.Text(size=12, weight=ft.FontWeight.W_600,
+                                      color=self.palette.accent)
+        clear_selection_button = ft.IconButton(
+            ft.Icons.CLOSE, icon_size=14, icon_color=self.palette.accent,
+            on_click=self._on_clear_selection,
+        )
+        self.t.bind(clear_selection_button, "tooltip", "toolbar.clear_selection")
+        self.selection_chip = ft.Container(
+            content=ft.Row([self.selection_text, clear_selection_button], spacing=0,
+                           tight=True, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            padding=ft.Padding.only(left=10, right=2),
+            bgcolor=ft.Colors.with_opacity(0.12, self.palette.accent),
+            border_radius=8,
+            visible=False,
+        )
+
         # Note: the two halves are separate rows on purpose. A wrapping row cannot
         # contain an expanding child (Flutter forbids Expanded inside a Wrap), so the
         # buttons wrap on their own while the filters stay pinned to the right.
@@ -661,7 +743,7 @@ class TKApp:
                 ft.Row(
                     [
                         self.start_button, self.pause_button, self.retry_button,
-                        self.clear_done_button, self.clear_all_button,
+                        self.clear_done_button, self.clear_all_button, self.selection_chip,
                     ],
                     spacing=8,
                     wrap=True,
@@ -682,6 +764,26 @@ class TKApp:
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
 
+    def _build_queue_header(self) -> ft.Control:
+        """(Re)build the sortable/select-all header row. See :meth:`_refresh_header`."""
+        visible = self._visible_items()
+        if not visible:
+            select_state: bool | None = False
+        elif all(i.uid in self._selected for i in visible):
+            select_state = True
+        elif any(i.uid in self._selected for i in visible):
+            select_state = None
+        else:
+            select_state = False
+        return queue_header(
+            self.t, self.palette, self._sort_key, self._sort_desc,
+            self._on_sort, select_state, self._on_select_all,
+        )
+
+    def _refresh_header(self) -> None:
+        """Swap in a freshly built header (sort arrow / select-all state changed)."""
+        self.table_body.controls[0] = self._build_queue_header()
+
     def _build_queue_card(self) -> ft.Control:
         self.queue_list = ft.ListView(expand=True, spacing=0, padding=0,
                                       build_controls_on_demand=True)
@@ -694,7 +796,7 @@ class TKApp:
         # The table keeps a minimum width so the Title column never collapses; on a
         # narrow window the whole table scrolls sideways instead.
         self.table_body = ft.Column(
-            [queue_header(self.t, self.palette), self.empty_holder, self.queue_list],
+            [self._build_queue_header(), self.empty_holder, self.queue_list],
             spacing=0,
             width=TABLE_MIN_WIDTH,
         )
@@ -768,6 +870,14 @@ class TKApp:
         self.ram_bar = ft.ProgressBar(value=0, width=90, bar_height=6, border_radius=4,
                                       bgcolor=self.palette.surface_hi, color=self.palette.accent)
 
+        gpu_label = ft.Text("GPU", size=12, weight=ft.FontWeight.W_700, color=dim)
+        self.gpu_value = ft.Text("-", size=13, weight=ft.FontWeight.BOLD,
+                                 color=self.palette.text, width=32,
+                                 font_family="monospace")
+        self.gpu_bar = ft.ProgressBar(value=0, width=90, bar_height=6, border_radius=4,
+                                      bgcolor=self.palette.surface_hi, color=self.palette.accent)
+        self.gpu_icon = ft.Icon(ft.Icons.MONITOR, size=17, color=self.palette.accent)
+
         self.disk_value = ft.Text("-", size=12, color=dim, font_family="monospace")
         disk_label = ft.Text(size=12, color=dim)
         self.t.bind(disk_label, "value", "statusbar.disk")
@@ -794,6 +904,8 @@ class TKApp:
                     divider(),
                     ft.Icon(ft.Icons.DEVELOPER_BOARD, size=17, color=self.palette.accent),
                     ram_label, self.ram_value, self.ram_bar,
+                    divider(),
+                    self.gpu_icon, gpu_label, self.gpu_value, self.gpu_bar,
                     divider(),
                     ft.Icon(ft.Icons.STORAGE, size=16, color=dim),
                     disk_label, self.disk_value,
@@ -861,6 +973,12 @@ class TKApp:
         self.start_button.disabled = running or self.manager.is_expanding
         self.pause_button.disabled = not running
 
+        if self._selected:
+            self.selection_chip.visible = True
+            self.selection_text.value = self.t("toolbar.selected_count", count=len(self._selected))
+        else:
+            self.selection_chip.visible = False
+
     def _paint_status_bar(self) -> None:
         snapshot = self._snapshot
         self.cpu_value.value = snapshot.format_cpu()
@@ -869,6 +987,21 @@ class TKApp:
         self.ram_value.value = snapshot.format_ram()
         self.ram_bar.value = min(1.0, snapshot.ram_percent / 100.0)
         self.ram_bar.color = self._load_color(snapshot.ram_percent)
+
+        if snapshot.gpu_percent is not None:
+            self.gpu_value.value = snapshot.format_gpu()
+            self.gpu_value.tooltip = snapshot.gpu_name or None
+            self.gpu_bar.value = min(1.0, snapshot.gpu_percent / 100.0)
+            self.gpu_bar.color = self._load_color(snapshot.gpu_percent)
+            self.gpu_bar.visible = True
+            self.gpu_icon.color = self.palette.accent
+        else:
+            # No NVIDIA GPU detected (or nvidia-smi unavailable) — show a dash
+            # rather than a fake 0%, and hide the empty bar.
+            self.gpu_value.value = "-"
+            self.gpu_bar.visible = False
+            self.gpu_icon.color = self.palette.text_dim
+
         self.disk_value.value = f"{snapshot.disk_free_gb:.1f} GB" if snapshot.disk_free_gb else "-"
         self.archive_value.value = str(self.store.archive_size())
         if self._status_message:
@@ -889,6 +1022,16 @@ class TKApp:
     def _mark_rebuild(self) -> None:
         self._needs_rebuild = True
 
+    # Extractor for each sortable column key -> widgets.SORTABLE_COLUMNS.
+    _SORT_KEYS: dict[str, Callable[[QueueItem], object]] = {
+        "no": lambda i: i.profile_position or i.position,
+        "profile": lambda i: i.profile.lower(),
+        "title": lambda i: i.title.lower(),
+        "status": lambda i: i.status,
+        "speed": lambda i: i.speed,
+        "eta": lambda i: (i.eta if i.eta >= 0 else float("inf")),
+    }
+
     def _visible_items(self) -> list[QueueItem]:
         items = list(self.manager.items)
         if self._filter_profile != "*":
@@ -898,8 +1041,12 @@ class TKApp:
             items = [i for i in items
                      if needle in i.title.lower() or needle in i.url.lower()
                      or needle in (i.video_id or "").lower()]
+        key_func = self._SORT_KEYS.get(self._sort_key, self._SORT_KEYS["no"])
+        items.sort(key=key_func, reverse=self._sort_desc)
         if self.settings.group_by_profile:
-            items.sort(key=lambda i: (i.profile.lower(), i.position))
+            # Grouping always wins over the column sort for the *grouping* itself;
+            # the chosen column still orders the rows inside each profile group.
+            items.sort(key=lambda i: i.profile.lower())
         return items
 
     def _rebuild_queue_list(self) -> None:
@@ -908,6 +1055,9 @@ class TKApp:
         controls: list[ft.Control] = []
         live: dict[str, QueueRow] = {}
         current_profile: str | None = None
+        # Drop selections for items that were removed from the queue entirely;
+        # a selection made before filtering/searching survives the view change.
+        self._selected &= {i.uid for i in self.manager.items}
 
         if self.settings.group_by_profile:
             counts: dict[str, int] = {}
@@ -920,10 +1070,11 @@ class TKApp:
                 controls.append(group_header(item.profile, counts.get(item.profile, 0),
                                              self.palette))
             row = self.rows.get(item.uid)
+            selected = item.uid in self._selected
             if row is None or row.item is not item:
-                row = QueueRow(item, self.t, self.palette, self._on_row_action)
+                row = QueueRow(item, self.t, self.palette, self._on_row_action, selected=selected)
             else:
-                row.sync()
+                row.sync(selected=selected)
             live[item.uid] = row
             controls.append(row.control)
 
@@ -931,6 +1082,7 @@ class TKApp:
         self.queue_list.controls = controls
         self.empty_holder.visible = not controls
         self._refresh_profile_filter()
+        self._refresh_header()
 
     def _refresh_profile_filter(self) -> None:
         profiles = self.manager.profiles()
@@ -959,8 +1111,10 @@ class TKApp:
         """Re-apply anything that is not a simple bound label."""
         self._refresh_naming_example()
         self._refresh_accel_hint()
+        self._refresh_ffmpeg_status()
         self._refresh_all_rows()
         self._refresh_profile_filter()
+        self._refresh_header()
         for option, quality in zip(self.quality_dropdown.options, QUALITY_ORDER):
             option.text = self._quality_label(quality)
         if self.cookies_dropdown.options:
@@ -1031,6 +1185,29 @@ class TKApp:
         else:
             key = "perf.mode_none"
         self.accel_hint.value = self.t(key)
+
+    def _refresh_ffmpeg_status(self) -> None:
+        found = find_ffmpeg(self.settings.ffmpeg_path)
+        if found:
+            self.ffmpeg_status.value = self.t("perf.ffmpeg_found", path=found)
+            self.ffmpeg_status.color = self.palette.status_color(ItemStatus.COMPLETED.value)
+        else:
+            self.ffmpeg_status.value = self.t("perf.ffmpeg_missing")
+            self.ffmpeg_status.color = self.palette.status_color(ItemStatus.ERROR.value)
+
+    async def _on_locate_ffmpeg(self, e: ft.Event) -> None:
+        """Let the user point directly at ffmpeg when it isn't (yet) on PATH."""
+        files = await self.file_picker.pick_files(
+            dialog_title=self.t("perf.locate_ffmpeg"),
+            allow_multiple=False,
+        )
+        if not files:
+            return
+        self.settings.ffmpeg_path = files[0].path
+        self.settings.save()
+        self._refresh_ffmpeg_status()
+        self._append_log(f"FFmpeg location set to: {files[0].path}")
+        self.page.update()
 
     def _on_cookies_browser_change(self, e: ft.Event) -> None:
         self.settings.cookies_browser = self.cookies_dropdown.value or ""
@@ -1105,10 +1282,20 @@ class TKApp:
         self.manager.add_links_async(text, on_done=done)
 
     def _on_start(self, e: ft.Event) -> None:
-        started = self.manager.start()
+        # A non-empty table selection means "download just these"; otherwise the
+        # whole queued/paused backlog starts, as before.
+        subset = set(self._selected) if self._selected else None
+        started = self.manager.start(subset_uids=subset)
+        self._selected.clear()
+        self._mark_rebuild()
         self._shutdown_cancelled = False
         self._set_status(self.t("msg.started", count=started) if started
                          else self.t("msg.nothing_to_start"))
+        self.page.update()
+
+    def _on_clear_selection(self, e: ft.Event) -> None:
+        self._selected.clear()
+        self._mark_rebuild()
         self.page.update()
 
     def _on_pause(self, e: ft.Event) -> None:
@@ -1145,11 +1332,48 @@ class TKApp:
         self.settings.save()
         self._mark_rebuild()
 
+    def _on_sort(self, key: str) -> None:
+        """Header click: sort by this column, or flip direction if already sorted by it."""
+        if self._sort_key == key:
+            self._sort_desc = not self._sort_desc
+        else:
+            self._sort_key = key
+            self._sort_desc = False
+        self._mark_rebuild()
+        self.page.update()
+
+    def _on_select_all(self, value: bool) -> None:
+        """Header checkbox: (de)select every item in the current, filtered view."""
+        for item in self._visible_items():
+            if value:
+                self._selected.add(item.uid)
+            else:
+                self._selected.discard(item.uid)
+        self._mark_rebuild()
+        self.page.update()
+
+    def _on_fetch_limit_change(self, e: ft.Event) -> None:
+        raw = (self.fetch_limit_field.value or "").strip()
+        try:
+            self.settings.fetch_limit = max(0, int(raw)) if raw else 0
+        except ValueError:
+            self.settings.fetch_limit = 0
+        self.settings.save()
+
+    def _on_profile_folder_toggle(self, e: ft.Event) -> None:
+        self.settings.save_by_profile_folder = bool(self.profile_folder_checkbox.value)
+        self.settings.save()
+
     def _on_row_action(self, action: str, item: QueueItem) -> None:
         if action == "open":
             target = item.filepath or self.settings.download_dir
             open_folder(str(Path(target).parent if item.filepath else target))
+        elif action == "play":
+            if not play_file(item.filepath):
+                self._set_status(self.t("msg.play_failed"))
+                self.page.update()
         elif action == "remove":
+            self._selected.discard(item.uid)
             self.manager.remove([item.uid])
         elif action == "retry":
             item.set_status(ItemStatus.QUEUED)
@@ -1157,6 +1381,14 @@ class TKApp:
             item.progress = 0.0
             self.store.upsert(item)
             self._mark_dirty(item)
+        elif action == "select":
+            self._selected.add(item.uid)
+            self._refresh_header()
+            self.page.update()
+        elif action == "deselect":
+            self._selected.discard(item.uid)
+            self._refresh_header()
+            self.page.update()
 
     def _on_page_close(self, e: ft.Event | None = None) -> None:
         """Persist and release resources when the window goes away."""

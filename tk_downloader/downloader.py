@@ -15,7 +15,7 @@ from yt_dlp import YoutubeDL
 from .config import Settings
 from .cookies import cookie_options
 from .models import ItemStatus, NamingMode, QueueItem, Quality, make_uid
-from .naming import output_template, sidecar_path_for, write_sidecar
+from .naming import output_template, profile_subdir, sidecar_path_for, write_sidecar
 from .state import StateStore
 from .utils import guess_profile, parse_links
 
@@ -36,9 +36,58 @@ class DownloadCancelled(Exception):
 # yt-dlp option building
 # --------------------------------------------------------------------------------------
 
-def has_ffmpeg() -> bool:
+# Common install locations that don't end up on PATH, checked as a last resort.
+# winget's shim usually does land on PATH, but the underlying WinGet Links folder
+# and a plain "install to Program Files, forget to add PATH" are both frequent
+# enough on Windows to special-case.
+_WINDOWS_FFMPEG_HINTS = (
+    r"%LOCALAPPDATA%\Microsoft\WinGet\Links\ffmpeg.exe",
+    r"%LOCALAPPDATA%\Microsoft\WinGet\Packages",   # searched recursively, one level
+    r"%ProgramFiles%\ffmpeg\bin\ffmpeg.exe",
+    r"%ProgramFiles(x86)%\ffmpeg\bin\ffmpeg.exe",
+    r"C:\ffmpeg\bin\ffmpeg.exe",
+)
+
+
+def find_ffmpeg(explicit_path: str = "") -> str:
+    """Locate an ffmpeg executable. Returns its path, or "" if none was found.
+
+    Search order: an explicit path the user set in Settings, then ``PATH``,
+    then a short list of common Windows install locations that frequently
+    aren't on ``PATH`` (a plain zip extraction, or WinGet's Links folder not
+    yet picked up by the current shell).
+    """
+    if explicit_path:
+        candidate = Path(explicit_path).expanduser()
+        if candidate.is_dir():
+            for name in ("ffmpeg.exe", "ffmpeg"):
+                if (candidate / name).is_file():
+                    return str(candidate / name)
+        elif candidate.is_file():
+            return str(candidate)
+
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+
+    if os.name == "nt":
+        for hint in _WINDOWS_FFMPEG_HINTS:
+            expanded = os.path.expandvars(hint)
+            path = Path(expanded)
+            if path.is_file():
+                return str(path)
+            if path.is_dir():
+                try:
+                    match = next(path.glob("**/ffmpeg.exe"))
+                    return str(match)
+                except StopIteration:
+                    continue
+    return ""
+
+
+def has_ffmpeg(explicit_path: str = "") -> bool:
     """FFmpeg is required to merge separate video+audio streams and to remux to mp4."""
-    return bool(shutil.which("ffmpeg"))
+    return bool(find_ffmpeg(explicit_path))
 
 
 _HEIGHTS = {
@@ -129,16 +178,25 @@ def build_ydl_opts(
     log_sink: Callable[[str], None] | None = None,
 ) -> dict:
     """Assemble the yt-dlp options for one queue item."""
-    ffmpeg = has_ffmpeg()
+    ffmpeg_bin = find_ffmpeg(settings.ffmpeg_path)
+    ffmpeg = bool(ffmpeg_bin)
     quality = settings.quality_enum
     naming = settings.naming
     outdir = Path(settings.download_dir).expanduser()
     outdir.mkdir(parents=True, exist_ok=True)
 
+    # Each profile gets its own subfolder by default (e.g. "<download_dir>/@user/"),
+    # so videos from different profiles never land mixed together in one folder.
+    filename_template = output_template(naming, item.profile_position or item.position)
+    if settings.save_by_profile_folder:
+        outtmpl = f"{profile_subdir(item.profile)}/{filename_template}"
+    else:
+        outtmpl = filename_template
+
     opts: dict = {
         # --- naming: for ID mode this is literally "%(id)s.%(ext)s" -------------
         "paths": {"home": str(outdir)},
-        "outtmpl": {"default": output_template(naming, item.position)},
+        "outtmpl": {"default": outtmpl},
         "format": format_selector(quality, ffmpeg),
         "noplaylist": True,           # items are already single videos after expansion
         # --- Smart Resume -------------------------------------------------------
@@ -160,6 +218,12 @@ def build_ydl_opts(
         "trim_file_name": 150,
         "overwrites": False,
     }
+
+    if ffmpeg_bin:
+        # Points yt-dlp at the exact binary we found, independent of PATH — fixes
+        # the classic "ffmpeg is installed but not on PATH" case where quality
+        # silently falls back to a single, lower-resolution progressive stream.
+        opts["ffmpeg_location"] = ffmpeg_bin
 
     if progress_hook:
         opts["progress_hooks"] = [progress_hook]
@@ -228,6 +292,11 @@ def expand_url(
         "noprogress": True,
         "logger": _YdlLogger(log_sink),
     }
+    if settings.fetch_limit > 0:
+        # Cap how many videos are pulled from a single pasted profile/channel link.
+        # yt-dlp still walks the listing in order, so this reliably means "the
+        # N most recent uploads" rather than a random subset.
+        opts["playlistend"] = settings.fetch_limit
     opts.update(cookie_options(settings.cookies_browser, settings.cookies_file))
 
     with YoutubeDL(opts) as ydl:
@@ -334,6 +403,9 @@ class DownloadManager:
         self._batch_started_at: float | None = None
         self._completed_durations: list[float] = []
         self._last_persist: dict[str, float] = {}
+        # How many items have been seen per profile so far; drives QueueItem.profile_position
+        # (the table's "No" column and the Num_Title numbering both restart at 1 per profile).
+        self._profile_counts: dict[str, int] = {}
 
     # -- properties ------------------------------------------------------------------
     @property
@@ -353,6 +425,11 @@ class DownloadManager:
         """Restore a previous session's queue (Smart Resume)."""
         with self._lock:
             self.items = list(items)
+            self._profile_counts = {}
+            for item in self.items:
+                current = self._profile_counts.get(item.profile, 0)
+                if item.profile_position > current:
+                    self._profile_counts[item.profile] = item.profile_position
             if reset_active:
                 for item in self.items:
                     # Anything that was mid-flight when the app died goes back to
@@ -406,6 +483,8 @@ class DownloadManager:
                     continue
                 position += 1
                 item.position = position
+                self._profile_counts[item.profile] = self._profile_counts.get(item.profile, 0) + 1
+                item.profile_position = self._profile_counts[item.profile]
                 item.session_id = self.store.session_id
                 existing.add(item.uid)
                 fresh.append(item)
@@ -448,12 +527,19 @@ class DownloadManager:
         return count
 
     # -- run control -------------------------------------------------------------------
-    def start(self) -> int:
-        """Start (or resume) downloading everything still queued."""
+    def start(self, subset_uids: set[str] | None = None) -> int:
+        """Start (or resume) downloading.
+
+        With ``subset_uids`` omitted, every queued/paused item runs (the normal
+        "Start" button). Pass a set of uids — e.g. from a table selection — to
+        download only those, leaving the rest of the queue untouched.
+        """
         with self._lock:
             if self._running:
                 return 0
             pending = [i for i in self.items if i.status_enum in (ItemStatus.QUEUED, ItemStatus.PAUSED)]
+            if subset_uids is not None:
+                pending = [i for i in pending if i.uid in subset_uids]
             for item in pending:
                 item.set_status(ItemStatus.QUEUED)
             if not pending:
@@ -657,6 +743,8 @@ class DownloadManager:
     def _find_existing_file(self, item: QueueItem, info: dict) -> Path | None:
         """Locate a previously downloaded file for this item."""
         outdir = Path(self.settings.download_dir).expanduser()
+        if self.settings.save_by_profile_folder:
+            outdir = outdir / profile_subdir(item.profile)
         video_id = str(info.get("id") or item.video_id or "")
         candidates: list[Path] = []
         if self.settings.naming is NamingMode.ID_ONLY and video_id:
