@@ -1,0 +1,28 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Build output
+build/
+dist/
+*.spec
+
+# App data that must never be committed
+*.db
+*.db-wal
+*.db-shm
+download_archive.txt
+settings.json
+
+# Optional UI font dropped in by the user (see assets/fonts/README.md)
+tk_downloader/assets/fonts/*.ttf
+tk_downloader/assets/fonts/*.otf
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

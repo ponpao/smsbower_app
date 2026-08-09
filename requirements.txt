@@ -1,0 +1,21 @@
+# TK Downloader — runtime dependencies (Python 3.11+)
+
+# Desktop UI toolkit. The app targets the 0.86 control API (ft.run, ft.Colors,
+# ft.DropdownOption, page.show_dialog); pinned to that minor line on purpose.
+flet>=0.86,<0.87
+
+# Download engine. Keep this one up to date — extractors break as sites change.
+yt-dlp>=2025.1.1
+
+# Live CPU / RAM readout in the bottom status bar.
+psutil>=5.9
+
+# Image handling (thumbnails, icons).
+Pillow>=10.0
+
+# Optional: extra image-gallery sites (Instagram photo posts, etc.).
+# Uncomment if you want gallery-dl as a fallback extractor.
+# gallery-dl>=1.27
+
+# Optional, for building a standalone executable — see README "Packaging".
+# pyinstaller>=6.0
