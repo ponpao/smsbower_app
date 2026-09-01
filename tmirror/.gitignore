@@ -1,0 +1,7 @@
+node_modules/
+out/
+dist/
+out-tsc-node/
+out-tsc-web/
+*.log
+.DS_Store
